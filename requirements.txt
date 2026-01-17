@@ -1,0 +1,15 @@
+# =========================
+# Librerías para Telegram
+# =========================
+python-telegram-bot==20.7
+
+# =========================
+# Librerías de base de datos
+# =========================
+pymongo==4.4.0
+
+# =========================
+# Librerías de utilidades
+# =========================
+requests==2.31.0
+pytz==2023.3
