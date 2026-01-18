@@ -16,7 +16,7 @@ from app.admin_panel import AdminPanel
 from app.usuario import Usuario
 from app.referido import Referido
 from app.models import UsuarioModel, OperacionModel, ReferidoModel
-from config import ADMIN_TELEGRAM_IDS
+from app.config import ADMIN_TELEGRAM_IDS
 
 
 class Bot:
