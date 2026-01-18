@@ -14,7 +14,7 @@ from app.mensajes import mensaje_capital, mensaje_historial, mensaje_referidos, 
 from app.admin_panel import AdminPanel
 
 from app.usuario import Usuario
-from app.referido import Referido
+from app.referidos import Referido
 from app.models import UsuarioModel, OperacionModel, ReferidoModel
 from app.config import ADMIN_TELEGRAM_IDS
 
