@@ -18,6 +18,17 @@ if not TELEGRAM_BOT_TOKEN:
     raise ValueError("Debe configurar la variable de entorno TELEGRAM_BOT_TOKEN con el token real del bot")
 
 
+def _normalize_api_credential(value: str) -> str:
+    """Limpia credenciales pegadas desde móvil/portapapeles."""
+    if value is None:
+        return ""
+    cleaned = str(value).strip()
+    for ch in ("\u200b", "\u200c", "\u200d", "\ufeff", "\u2060"):
+        cleaned = cleaned.replace(ch, "")
+    return cleaned.strip("`\"' ")
+
+
+
 class Bot:
     def __init__(self):
         self.app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
@@ -26,6 +37,7 @@ class Bot:
         self.app.add_handler(CommandHandler("start", self.start))
         self.app.add_handler(CallbackQueryHandler(self.boton_click))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.manejar_mensajes))
+        self.app.add_error_handler(self.error_handler)
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         usuario_id = update.effective_user.id
@@ -203,11 +215,13 @@ class Bot:
 
     async def manejar_mensajes(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         telegram_id = update.effective_user.id
-        texto = update.message.text.strip()
+        texto = (update.message.text or "").strip()
         usuario = UsuarioModel.obtener_usuario({"telegram_id": telegram_id})
 
         if not usuario or not usuario.get("estado"):
             return
+
+        logger.info("Mensaje de estado recibido telegram_id=%s estado=%s", telegram_id, usuario.get("estado"))
 
         if usuario["estado"] == "esperando_api_key":
             api_key = _normalize_api_credential(texto)
@@ -264,6 +278,11 @@ class Bot:
                 ),
                 reply_markup=self._menu_for(telegram_id),
             )
+
+
+
+    async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE):
+        logger.exception("Error no controlado en Telegram bot", exc_info=context.error)
 
     def start_bot(self):
         logger.info("Iniciando polling de Telegram")
