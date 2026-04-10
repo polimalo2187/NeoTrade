@@ -69,17 +69,26 @@ class Bot:
         reply_markup = self._menu_for(usuario_id)
         await update.message.reply_text(mensaje_bienvenida, reply_markup=reply_markup)
 
+    def _navigation_keyboard(self, back_callback: str, include_home: bool = True) -> InlineKeyboardMarkup:
+        keyboard = [[InlineKeyboardButton("🔙 Volver atrás", callback_data=back_callback)]]
+        if include_home:
+            keyboard.append([InlineKeyboardButton("🏠 Menú principal", callback_data="NAV_MAIN")])
+        return InlineKeyboardMarkup(keyboard)
+
+    def _append_navigation(self, keyboard_rows, back_callback: str, include_home: bool = True) -> InlineKeyboardMarkup:
+        rows = [list(row) for row in keyboard_rows]
+        rows.append([InlineKeyboardButton("🔙 Volver atrás", callback_data=back_callback)])
+        if include_home:
+            rows.append([InlineKeyboardButton("🏠 Menú principal", callback_data="NAV_MAIN")])
+        return InlineKeyboardMarkup(rows)
+
     def menu_principal(self):
         teclado = [[InlineKeyboardButton(text=btn, callback_data=btn) for btn in fila] for fila in BOTONES_PRINCIPAL]
-        teclado.append([InlineKeyboardButton("🔙 Volver atrás", callback_data="VOLVER_ATRAS")])
-        teclado.append([InlineKeyboardButton("🏠 Menú principal", callback_data="VOLVER_MENU")])
         return InlineKeyboardMarkup(teclado)
 
     def menu_configuracion(self):
         teclado = [[InlineKeyboardButton(text=btn, callback_data=btn) for btn in fila] for fila in BOTONES_CONFIGURACION]
-        teclado.append([InlineKeyboardButton("🔙 Volver atrás", callback_data="VOLVER_ATRAS")])
-        teclado.append([InlineKeyboardButton("🏠 Menú principal", callback_data="VOLVER_MENU")])
-        return InlineKeyboardMarkup(teclado)
+        return self._append_navigation(teclado, "NAV_MAIN")
 
     def menu_principal_admin(self):
         teclado = [[InlineKeyboardButton(text=btn, callback_data=btn) for btn in fila] for fila in BOTONES_PRINCIPAL]
@@ -93,8 +102,6 @@ class Bot:
         ]
         for text_btn, callback in admin_buttons:
             teclado.append([InlineKeyboardButton(text=text_btn, callback_data=callback)])
-        teclado.append([InlineKeyboardButton("🔙 Volver atrás", callback_data="VOLVER_ATRAS")])
-        teclado.append([InlineKeyboardButton("🏠 Menú principal", callback_data="VOLVER_MENU")])
         return InlineKeyboardMarkup(teclado)
 
     def _menu_for(self, telegram_id: int):
@@ -110,19 +117,38 @@ class Bot:
             if handled:
                 return
 
-        if query.data == "VOLVER_MENU":
-            UsuarioModel.actualizar_usuario({"telegram_id": telegram_id}, {"estado": None})
+        if query.data == "NAV_MAIN":
+            UsuarioModel.actualizar_usuario({"telegram_id": telegram_id}, {"estado": None, "api_key_temp": None})
             await query.edit_message_text(
                 "Menú principal:",
                 reply_markup=self._menu_for(telegram_id),
             )
             return
 
-        if query.data == "VOLVER_ATRAS":
-            UsuarioModel.actualizar_usuario({"telegram_id": telegram_id}, {"estado": None})
+        if query.data == "NAV_CONFIG":
+            UsuarioModel.actualizar_usuario({"telegram_id": telegram_id}, {"estado": None, "api_key_temp": None})
             await query.edit_message_text(
-                "Volviendo atrás...",
-                reply_markup=self._menu_for(telegram_id),
+                mensaje_configuracion(),
+                reply_markup=self.menu_configuracion(),
+            )
+            return
+
+        if query.data == "NAV_FEE":
+            UsuarioModel.actualizar_usuario({"telegram_id": telegram_id}, {"estado": None})
+            usuario_nav = UsuarioModel.obtener_usuario({"telegram_id": telegram_id}) or {}
+            invoice_nav = self.fee_manager.obtener_factura_usuario(telegram_id)
+            await query.edit_message_text(
+                mensaje_fee(usuario_nav, invoice_nav),
+                reply_markup=self._navigation_keyboard("NAV_MAIN"),
+            )
+            return
+
+        if query.data == "NAV_REFERIDOS":
+            UsuarioModel.actualizar_usuario({"telegram_id": telegram_id}, {"estado": None})
+            usuario_nav = UsuarioModel.obtener_usuario({"telegram_id": telegram_id}) or {}
+            await query.edit_message_text(
+                mensaje_referidos(usuario_nav),
+                reply_markup=self._navigation_keyboard("NAV_MAIN"),
             )
             return
 
@@ -135,7 +161,7 @@ class Bot:
             if not usuario.get("api_key") or not usuario.get("api_secret"):
                 await query.edit_message_text(
                     "Antes de activar el bot debes configurar API Key y API Secret de CoinW Spot.",
-                    reply_markup=self._menu_for(telegram_id),
+                    reply_markup=self._navigation_keyboard("NAV_MAIN"),
                 )
                 return
 
@@ -178,27 +204,27 @@ class Bot:
 
         if query.data == "💰 Capital":
             usuario = UsuarioModel.obtener_usuario({"telegram_id": telegram_id})
-            await query.edit_message_text(mensaje_capital(usuario), reply_markup=self._menu_for(telegram_id))
+            await query.edit_message_text(mensaje_capital(usuario), reply_markup=self._navigation_keyboard("NAV_MAIN"))
             return
 
         if query.data == "📊 Historial":
             operaciones = OperacionModel.obtener_operaciones({"telegram_id": telegram_id}, limit=10)
-            await query.edit_message_text(mensaje_historial(operaciones), reply_markup=self._menu_for(telegram_id))
+            await query.edit_message_text(mensaje_historial(operaciones), reply_markup=self._navigation_keyboard("NAV_MAIN"))
             return
 
         if query.data == "🔗 Referidos":
-            await query.edit_message_text(mensaje_referidos(usuario), reply_markup=self._menu_for(telegram_id))
+            await query.edit_message_text(mensaje_referidos(usuario), reply_markup=self._navigation_keyboard("NAV_MAIN"))
             return
 
         if query.data == "💳 Introducir API Key":
             UsuarioModel.actualizar_usuario({"telegram_id": telegram_id}, {"estado": "esperando_api_key"})
-            await query.edit_message_text("Por favor, introduce tu API Key de CoinW:", reply_markup=self._menu_for(telegram_id))
+            await query.edit_message_text("Por favor, introduce tu API Key de CoinW:", reply_markup=self._navigation_keyboard("NAV_CONFIG"))
             return
 
         if query.data == "🔔 Notificaciones":
             await query.edit_message_text(
                 "Las notificaciones operativas ya están habilitadas para aperturas y cierres de operaciones.",
-                reply_markup=self._menu_for(telegram_id),
+                reply_markup=self._navigation_keyboard("NAV_CONFIG"),
             )
             return
 
@@ -209,7 +235,7 @@ class Bot:
         if query.data == "💸 Fee":
             usuario = UsuarioModel.obtener_usuario({"telegram_id": telegram_id})
             invoice = self.fee_manager.obtener_factura_usuario(telegram_id)
-            await query.edit_message_text(mensaje_fee(usuario, invoice), reply_markup=self._menu_for(telegram_id))
+            await query.edit_message_text(mensaje_fee(usuario, invoice), reply_markup=self._navigation_keyboard("NAV_MAIN"))
             return
 
         if query.data == "✅ Ya pagué fee":
@@ -217,7 +243,7 @@ class Bot:
             if not invoice:
                 await query.edit_message_text(
                     "No tienes una factura activa para reportar en este momento.",
-                    reply_markup=self._menu_for(telegram_id),
+                    reply_markup=self._navigation_keyboard("NAV_FEE"),
                 )
                 return
             UsuarioModel.actualizar_usuario(
@@ -233,13 +259,13 @@ class Bot:
                     "Nota: transferencia interna CoinW realizada\n"
                     f"Factura: {invoice.get('invoice_id')}"
                 ),
-                reply_markup=self._menu_for(telegram_id),
+                reply_markup=self._navigation_keyboard("NAV_FEE"),
             )
             return
 
         await query.edit_message_text(
             "Opción no reconocida ❌",
-            reply_markup=self._menu_for(telegram_id),
+            reply_markup=self._navigation_keyboard("NAV_MAIN"),
         )
 
     async def manejar_mensajes(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -258,7 +284,7 @@ class Bot:
                 {"telegram_id": telegram_id},
                 {"api_key_temp": api_key, "estado": "esperando_api_secret"},
             )
-            await update.message.reply_text("Ahora introduce tu API Secret de CoinW:", reply_markup=self.menu_principal())
+            await update.message.reply_text("Ahora introduce tu API Secret de CoinW:", reply_markup=self._navigation_keyboard("NAV_CONFIG"))
             return
 
         if usuario["estado"] == "esperando_api_secret":
@@ -277,7 +303,7 @@ class Bot:
                 )
                 await update.message.reply_text(
                     "API Key y API Secret validadas correctamente ✅\nYa puedes activar el bot.",
-                    reply_markup=self._menu_for(telegram_id),
+                    reply_markup=self._navigation_keyboard("NAV_MAIN"),
                 )
             else:
                 UsuarioModel.actualizar_usuario(
@@ -286,7 +312,7 @@ class Bot:
                 )
                 await update.message.reply_text(
                     f"No se pudo validar la API ❌\nMotivo: {error_msg}\nIntenta de nuevo. Introduce tu API Key:",
-                    reply_markup=self._menu_for(telegram_id),
+                    reply_markup=self._navigation_keyboard("NAV_CONFIG"),
                 )
             return
 
@@ -296,7 +322,7 @@ class Bot:
             if not invoice:
                 await update.message.reply_text(
                     "No encontré una factura activa para reportar. Revisa primero el botón 💸 Fee.",
-                    reply_markup=self._menu_for(telegram_id),
+                    reply_markup=self._navigation_keyboard("NAV_MAIN"),
                 )
                 return
             await update.message.reply_text(
@@ -305,7 +331,7 @@ class Bot:
                     f"Factura: {invoice.get('invoice_id')}\n"
                     "Tu reporte fue enviado al administrador. El trading seguirá pausado hasta confirmación manual."
                 ),
-                reply_markup=self._menu_for(telegram_id),
+                reply_markup=self._navigation_keyboard("NAV_FEE"),
             )
 
 
