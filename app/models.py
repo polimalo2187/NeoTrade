@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 
 from pymongo import DESCENDING
 
+from app.config import FEE_ADMIN_PORC, FEE_SETTLEMENT_THRESHOLD, PAYMENT_ASSET, PAYMENT_METHOD
 from app.db import Database
 
 
@@ -16,6 +17,8 @@ class UsuarioModel:
     def ensure_indexes() -> None:
         db.crear_indice(UsuarioModel.COLECCION, "telegram_id", unique=True)
         db.crear_indice(UsuarioModel.COLECCION, "bot_activo")
+        db.crear_indice(UsuarioModel.COLECCION, "trading_enabled")
+        db.crear_indice(UsuarioModel.COLECCION, "fee_status")
 
     @staticmethod
     def defaults(usuario_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -29,8 +32,22 @@ class UsuarioModel:
             "api_secret": None,
             "api_key_temp": None,
             "bot_activo": False,
+            "trading_enabled": True,
+            "trading_pause_reason": None,
+            "trading_lock_pending": False,
             "active_position": None,
             "last_engine_error": None,
+            "payment_method": PAYMENT_METHOD,
+            "payment_asset": PAYMENT_ASSET,
+            "fee_percent": float(FEE_ADMIN_PORC),
+            "fee_threshold": float(FEE_SETTLEMENT_THRESHOLD),
+            "fee_due_total": 0.0,
+            "fee_paid_total": 0.0,
+            "fee_credit_balance": 0.0,
+            "fee_status": "clear",
+            "pending_fee_invoice_id": None,
+            "last_fee_generated_at": None,
+            "last_fee_paid_at": None,
             "created_at": now,
             "updated_at": now,
             "stats": {
@@ -79,7 +96,21 @@ class UsuarioModel:
     def obtener_usuarios_activos() -> List[Dict[str, Any]]:
         return db.buscar_todos_documentos(
             UsuarioModel.COLECCION,
-            {"bot_activo": True, "api_key": {"$ne": None}, "api_secret": {"$ne": None}},
+            {
+                "bot_activo": True,
+                "trading_enabled": True,
+                "api_key": {"$ne": None},
+                "api_secret": {"$ne": None},
+            },
+        )
+
+    @staticmethod
+    def obtener_usuarios_bloqueados_fee() -> List[Dict[str, Any]]:
+        return db.buscar_todos_documentos(
+            UsuarioModel.COLECCION,
+            {"trading_pause_reason": "fee_due"},
+            sort=[("updated_at", DESCENDING)],
+            limit=50,
         )
 
     @staticmethod
@@ -128,6 +159,61 @@ class UsuarioModel:
             {f"stats.{k}": v for k, v in incrementos.items()},
         )
 
+    @staticmethod
+    def aplicar_bloqueo_fee(telegram_id: int, invoice_id: str):
+        return UsuarioModel.actualizar_usuario(
+            {"telegram_id": telegram_id},
+            {
+                "trading_enabled": False,
+                "trading_pause_reason": "fee_due",
+                "trading_lock_pending": False,
+                "fee_status": "locked",
+                "pending_fee_invoice_id": invoice_id,
+            },
+        )
+
+    @staticmethod
+    def marcar_fee_due(telegram_id: int, due_total: float):
+        fee_status = "due" if due_total > 0 else "clear"
+        return UsuarioModel.actualizar_usuario(
+            {"telegram_id": telegram_id},
+            {
+                "fee_due_total": float(due_total),
+                "fee_status": fee_status,
+                "last_fee_generated_at": datetime.utcnow(),
+            },
+        )
+
+    @staticmethod
+    def marcar_fee_lock_pending(telegram_id: int):
+        return UsuarioModel.actualizar_usuario(
+            {"telegram_id": telegram_id},
+            {
+                "trading_lock_pending": True,
+                "fee_status": "due",
+            },
+        )
+
+    @staticmethod
+    def limpiar_bloqueo_fee(telegram_id: int, due_total: float, paid_total: float, credit_balance: float):
+        fee_status = "clear" if due_total <= 0 else "due"
+        trading_enabled = due_total <= 0
+        trading_pause_reason = None if trading_enabled else "fee_due"
+        return UsuarioModel.actualizar_usuario(
+            {"telegram_id": telegram_id},
+            {
+                "fee_due_total": float(max(due_total, 0.0)),
+                "fee_paid_total": float(max(paid_total, 0.0)),
+                "fee_credit_balance": float(max(credit_balance, 0.0)),
+                "fee_status": fee_status,
+                "trading_enabled": trading_enabled,
+                "trading_pause_reason": trading_pause_reason,
+                "trading_lock_pending": False,
+                "pending_fee_invoice_id": None if trading_enabled else None,
+                "last_fee_paid_at": datetime.utcnow(),
+            },
+        )
+
 
 class OperacionModel:
     COLECCION = "operaciones"
@@ -160,6 +246,10 @@ class OperacionModel:
         payload = dict(actualizacion)
         payload["updated_at"] = datetime.utcnow()
         return db.actualizar_documento(OperacionModel.COLECCION, filtro, payload)
+
+    @staticmethod
+    def obtener_operacion(filtro: Dict[str, Any]):
+        return db.buscar_documento(OperacionModel.COLECCION, filtro)
 
 
 class ReferidoModel:
@@ -218,6 +308,7 @@ class FeeModel:
     def ensure_indexes() -> None:
         db.crear_indice(FeeModel.COLECCION, "telegram_id")
         db.crear_indice(FeeModel.COLECCION, "fecha")
+        db.crear_indice(FeeModel.COLECCION, "invoice_id", sparse=True)
 
     @staticmethod
     def registrar_fee(fee_data: Dict[str, Any]):
@@ -230,8 +321,56 @@ class FeeModel:
         return db.buscar_todos_documentos(FeeModel.COLECCION, filtro)
 
 
+class PaymentInvoiceModel:
+    COLECCION = "fee_invoices"
+
+    @staticmethod
+    def ensure_indexes() -> None:
+        db.crear_indice(PaymentInvoiceModel.COLECCION, "invoice_id", unique=True)
+        db.crear_indice(PaymentInvoiceModel.COLECCION, "telegram_id")
+        db.crear_indice(PaymentInvoiceModel.COLECCION, "status")
+        db.crear_indice(PaymentInvoiceModel.COLECCION, "created_at")
+
+    @staticmethod
+    def registrar_factura(invoice_data: Dict[str, Any]):
+        data = {
+            "status": "pending",
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow(),
+        }
+        data.update(invoice_data)
+        return db.insertar_documento(PaymentInvoiceModel.COLECCION, data)
+
+    @staticmethod
+    def obtener_factura(filtro: Dict[str, Any]):
+        return db.buscar_documento(PaymentInvoiceModel.COLECCION, filtro)
+
+    @staticmethod
+    def obtener_facturas(filtro: Dict[str, Any], limit: int = 20):
+        return db.buscar_todos_documentos(
+            PaymentInvoiceModel.COLECCION,
+            filtro,
+            sort=[("created_at", DESCENDING)],
+            limit=limit,
+        )
+
+    @staticmethod
+    def actualizar_factura(filtro: Dict[str, Any], actualizacion: Dict[str, Any]):
+        payload = dict(actualizacion)
+        payload["updated_at"] = datetime.utcnow()
+        return db.actualizar_documento(PaymentInvoiceModel.COLECCION, filtro, payload)
+
+    @staticmethod
+    def obtener_factura_pendiente_usuario(telegram_id: int):
+        return db.buscar_documento(
+            PaymentInvoiceModel.COLECCION,
+            {"telegram_id": telegram_id, "status": {"$in": ["pending", "reported"]}},
+        )
+
+
 def ensure_indexes() -> None:
     UsuarioModel.ensure_indexes()
     OperacionModel.ensure_indexes()
     ReferidoModel.ensure_indexes()
     FeeModel.ensure_indexes()
+    PaymentInvoiceModel.ensure_indexes()
