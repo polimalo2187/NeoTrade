@@ -1,99 +1,69 @@
-# =========================
-# Plantillas de mensajes para el bot de trading en Telegram
-# =========================
+from typing import Dict, List
 
-def mensaje_capital(usuario):
-    """
-    Retorna el mensaje con el capital del usuario.
-    """
-    return (
-        f"💰 Capital Total: {usuario.capital_total}\n"
-        f"📊 Capital Activo: {usuario.capital_activo}\n"
-        f"💹 Capital disponible para próxima operación: {usuario.capital_activo}"
-    )
 
-def mensaje_historial(operaciones):
-    """
-    Retorna el historial de operaciones del usuario.
-    operaciones: lista de diccionarios con info de cada operación
-    """
+def mensaje_capital(usuario: Dict) -> str:
+    capital_total = usuario.get("capital_total", 0)
+    capital_activo = usuario.get("capital_activo", 0)
+    active_position = usuario.get("active_position")
+
+    lines = [
+        f"💰 Capital estimado: {capital_total:.4f}",
+        f"📊 Capital activo configurado: {capital_activo:.4f}",
+        f"🤖 Bot activo: {'Sí' if usuario.get('bot_activo') else 'No'}",
+    ]
+
+    if active_position:
+        lines.extend(
+            [
+                "",
+                "📍 Posición activa:",
+                f"Par: {active_position.get('symbol')}",
+                f"Entrada: {active_position.get('entry_price')}",
+                f"SL: {active_position.get('stop_loss')}",
+                f"TP: {active_position.get('take_profit')}",
+            ]
+        )
+
+    if usuario.get("last_engine_error"):
+        lines.extend(["", f"⚠️ Último error del motor: {usuario['last_engine_error']}"])
+
+    return "\n".join(lines)
+
+
+def mensaje_historial(operaciones: List[Dict]) -> str:
     if not operaciones:
         return "📄 No hay operaciones registradas aún."
-    
-    mensaje = "📄 Historial de Operaciones:\n"
-    for op in operaciones[-10:]:  # Mostrar últimas 10 operaciones
-        mensaje += (
-            f"\n🔹 Tipo: {op.get('tipo', 'N/A')}"
-            f"\n💵 Entrada: {op.get('entry_price', 'N/A')}"
-            f"\n💰 Salida: {op.get('exit_price', 'N/A')}"
-            f"\n📈 Score: {op.get('score', 'N/A')}"
-            f"\n✅ Estado: {op.get('status', 'N/A')}\n"
-        )
-    return mensaje
 
-def mensaje_referidos(usuario):
-    """
-    Retorna el mensaje con el enlace único de referidos y ganancias.
-    """
-    enlace = usuario.generar_enlace_unico() if hasattr(usuario, 'generar_enlace_unico') else "Enlace no disponible"
-    ganancia_diaria = getattr(usuario, 'ganancia_diaria', 0)
-    ganancia_acumulada = getattr(usuario, 'ganancia_acumulada', 0)
-    
+    bloques = ["📄 Últimas operaciones:"]
+    for op in operaciones[:10]:
+        bloques.append(
+            "\n".join(
+                [
+                    f"• Par: {op.get('symbol', 'N/A')}",
+                    f"  Tipo: {op.get('side', op.get('tipo', 'N/A'))}",
+                    f"  Entrada: {op.get('entry_price', 'N/A')}",
+                    f"  Salida: {op.get('exit_price', 'N/A')}",
+                    f"  Estado: {op.get('status', 'N/A')}",
+                    f"  PnL: {op.get('pnl_quote', 0):.4f} {op.get('quote_asset', 'USDT')}",
+                ]
+            )
+        )
+    return "\n\n".join(bloques)
+
+
+def mensaje_referidos(usuario: Dict) -> str:
+    enlace = f"https://t.me/TradeNeo_bot?start={usuario.get('codigo_referido', usuario.get('telegram_id'))}"
     return (
         f"🔗 Tu enlace único de referido:\n{enlace}\n\n"
-        f"💵 Ganancia diaria referidos: {ganancia_diaria:.2f} USDT\n"
-        f"💰 Ganancia acumulada referidos: {ganancia_acumulada:.2f} USDT"
+        f"💵 Ganancia diaria referidos: {usuario.get('ganancia_diaria_referidos', 0):.2f} USDT\n"
+        f"💰 Ganancia acumulada referidos: {usuario.get('ganancia_acumulada_referidos', 0):.2f} USDT"
     )
 
-def mensaje_configuracion():
-    """
-    Retorna mensaje de introducción al menú de configuración.
-    """
+
+def mensaje_configuracion() -> str:
     return (
-        "⚙️ Menú de Configuración:\n"
-        "🔑 API Key / Secret\n"
-        "⚙️ Preferencias\n"
-        "🔔 Notificaciones"
+        "⚙️ Menú de configuración\n"
+        "• API Key / Secret de CoinW Spot\n"
+        "• Estado del bot\n"
+        "• Notificaciones básicas de operaciones"
     )
-
-# =========================
-# Funciones adicionales para el panel de administrador
-# =========================
-
-def mensaje_capital_total_usuarios(usuarios):
-    """
-    Mensaje con el capital total de todos los usuarios.
-    """
-    total = sum(u.get("capital_total", 0) for u in usuarios)
-    return f"💰 Capital total de todos los usuarios: {total:.2f} USDT"
-
-def mensaje_comisiones_referidos(referidos):
-    """
-    Mensaje con todas las comisiones de referidos registradas.
-    """
-    if not referidos:
-        return "No hay comisiones registradas aún."
-    
-    mensaje = "🔗 Comisiones de referidos:\n"
-    for r in referidos:
-        mensaje += f"{r['referidor_id']}: {r.get('comision', 0):.2f} USDT\n"
-    return mensaje
-
-def mensaje_historial_completo(operaciones):
-    """
-    Mensaje con historial completo de todas las operaciones de todos los usuarios.
-    """
-    if not operaciones:
-        return "No hay operaciones registradas aún."
-    
-    mensaje = "📄 Historial completo de operaciones:\n"
-    for op in operaciones[-20:]:  # últimas 20 operaciones globales
-        mensaje += (
-            f"\nUsuario: {op.get('telegram_id', 'N/A')}"
-            f"\n🔹 Tipo: {op.get('tipo', 'N/A')}"
-            f"\n💵 Entrada: {op.get('entry_price', 'N/A')}"
-            f"\n💰 Salida: {op.get('exit_price', 'N/A')}"
-            f"\n📈 Score: {op.get('score', 'N/A')}"
-            f"\n✅ Estado: {op.get('status', 'N/A')}\n"
-        )
-    return mensaje
