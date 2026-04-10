@@ -24,8 +24,11 @@ def mensaje_capital(usuario: Dict) -> str:
                 "📍 Posición activa:",
                 f"Par: {active_position.get('symbol')}",
                 f"Entrada: {active_position.get('entry_price')}",
-                f"SL: {active_position.get('stop_loss')}",
-                f"TP: {active_position.get('take_profit')}",
+                f"SL mental inicial: {active_position.get('initial_stop_loss') or active_position.get('stop_loss')}",
+                f"Activación TP dinámico: {active_position.get('dynamic_tp_activation_price') or active_position.get('take_profit')}",
+                f"TP dinámico activo: {'Sí' if active_position.get('dynamic_tp_active') else 'No'}",
+                f"Máximo visto: {active_position.get('highest_price_seen', active_position.get('entry_price'))}",
+                f"Confirmaciones debilidad: {active_position.get('weakness_confirmations', 0)}",
             ]
         )
 
