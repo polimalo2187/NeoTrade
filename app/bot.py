@@ -5,7 +5,8 @@ from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandle
 
 from app.admin_panel import AdminPanel
 from app.botones import BOTONES_CONFIGURACION, BOTONES_PRINCIPAL
-from app.config import ADMIN_TELEGRAM_IDS, TELEGRAM_BOT_TOKEN
+from app.config import ADMIN_TELEGRAM_IDS, QUOTE_ASSET, TELEGRAM_BOT_TOKEN
+from app.exchange import CoinWApiError, ExchangeClient
 from app.fee_manager import FeeManager
 from app.mensajes import mensaje_capital, mensaje_configuracion, mensaje_fee, mensaje_historial, mensaje_referidos
 from app.models import OperacionModel, UsuarioModel
@@ -27,6 +28,10 @@ def _normalize_api_credential(value: str) -> str:
         cleaned = cleaned.replace(ch, "")
     return cleaned.strip("`\"' ")
 
+
+
+def _format_decimal(value: float) -> str:
+    return f"{float(value):.8f}"
 
 
 class Bot:
@@ -133,12 +138,36 @@ class Bot:
                     reply_markup=self._menu_for(telegram_id),
                 )
                 return
+
+            balance_line = ""
+            try:
+                client = ExchangeClient(usuario.get("api_key"), usuario.get("api_secret"))
+                available_quote = float(client.obtener_balance_disponible(QUOTE_ASSET))
+                UsuarioModel.actualizar_capital_snapshot(telegram_id, available_quote, available_quote)
+                balance_line = f"\nCapital disponible detectado: {_format_decimal(available_quote)} {QUOTE_ASSET}"
+                logger.info(
+                    "USUARIO_ACTIVADO | telegram_id=%s | quote_asset=%s | capital_disponible=%s | fee_due_total=%s | trading_pause_reason=%s",
+                    telegram_id,
+                    QUOTE_ASSET,
+                    _format_decimal(available_quote),
+                    _format_decimal(float(usuario.get("fee_due_total") or 0.0)),
+                    usuario.get("trading_pause_reason") or "none",
+                )
+            except CoinWApiError as exc:
+                logger.warning(
+                    "USUARIO_ACTIVADO_SIN_SNAPSHOT | telegram_id=%s | motivo=%s",
+                    telegram_id,
+                    exc,
+                )
+            except Exception:
+                logger.exception("No se pudo obtener snapshot de capital al activar usuario %s", telegram_id)
+
             UsuarioModel.set_bot_activo(telegram_id, True)
             if usuario.get("trading_pause_reason") == "fee_due":
                 invoice = self.fee_manager.obtener_factura_usuario(telegram_id)
-                texto = "Bot activado ✅ pero el trading sigue bloqueado por fee pendiente.\n\n" + mensaje_fee(usuario, invoice)
+                texto = "Bot activado ✅ pero el trading sigue bloqueado por fee pendiente.\n\n" + mensaje_fee(usuario, invoice) + balance_line
             else:
-                texto = "Bot activado ✅\nEl motor ya puede abrir operaciones Spot reales."
+                texto = "Bot activado ✅\nEl motor ya puede abrir operaciones Spot reales." + balance_line
             await query.edit_message_text(texto, reply_markup=self._menu_for(telegram_id))
             return
 
