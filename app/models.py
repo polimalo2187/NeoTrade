@@ -105,6 +105,21 @@ class UsuarioModel:
         )
 
     @staticmethod
+    def obtener_usuarios_para_engine() -> List[Dict[str, Any]]:
+        return db.buscar_todos_documentos(
+            UsuarioModel.COLECCION,
+            {
+                "bot_activo": True,
+                "api_key": {"$ne": None},
+                "api_secret": {"$ne": None},
+                "$or": [
+                    {"trading_enabled": True},
+                    {"active_position": {"$ne": None}},
+                ],
+            },
+        )
+
+    @staticmethod
     def obtener_usuarios_bloqueados_fee() -> List[Dict[str, Any]]:
         return db.buscar_todos_documentos(
             UsuarioModel.COLECCION,
@@ -368,9 +383,97 @@ class PaymentInvoiceModel:
         )
 
 
+
+class TradeStateModel:
+    COLECCION = "trade_states"
+
+    @staticmethod
+    def ensure_indexes() -> None:
+        db.crear_indice(TradeStateModel.COLECCION, "trade_id", unique=True)
+        db.crear_indice(TradeStateModel.COLECCION, "telegram_id")
+        db.crear_indice(TradeStateModel.COLECCION, "status")
+        db.crear_indice(TradeStateModel.COLECCION, "symbol")
+        db.crear_indice(TradeStateModel.COLECCION, "updated_at")
+
+    @staticmethod
+    def upsert_estado(trade_id: str, telegram_id: int, state: Dict[str, Any]):
+        data = dict(state)
+        data["trade_id"] = trade_id
+        data["telegram_id"] = telegram_id
+        data.setdefault("created_at", datetime.utcnow())
+        data["updated_at"] = datetime.utcnow()
+        return db.actualizar_documento(
+            TradeStateModel.COLECCION,
+            {"trade_id": trade_id},
+            data,
+            upsert=True,
+        )
+
+    @staticmethod
+    def obtener_estado(filtro: Dict[str, Any]):
+        return db.buscar_documento(TradeStateModel.COLECCION, filtro)
+
+    @staticmethod
+    def obtener_estados(filtro: Optional[Dict[str, Any]] = None, limit: int = 100):
+        return db.buscar_todos_documentos(
+            TradeStateModel.COLECCION,
+            filtro or {},
+            sort=[("updated_at", DESCENDING)],
+            limit=limit,
+        )
+
+    @staticmethod
+    def actualizar_estado(filtro: Dict[str, Any], actualizacion: Dict[str, Any]):
+        payload = dict(actualizacion)
+        payload["updated_at"] = datetime.utcnow()
+        return db.actualizar_documento(TradeStateModel.COLECCION, filtro, payload)
+
+    @staticmethod
+    def cerrar_estado(trade_id: str, actualizacion: Optional[Dict[str, Any]] = None):
+        payload = {"status": "CLOSED", "closed_at": datetime.utcnow()}
+        payload.update(actualizacion or {})
+        payload["updated_at"] = datetime.utcnow()
+        return db.actualizar_documento(TradeStateModel.COLECCION, {"trade_id": trade_id}, payload)
+
+
+class TradeEventModel:
+    COLECCION = "trade_events"
+
+    @staticmethod
+    def ensure_indexes() -> None:
+        db.crear_indice(TradeEventModel.COLECCION, "trade_id")
+        db.crear_indice(TradeEventModel.COLECCION, "telegram_id")
+        db.crear_indice(TradeEventModel.COLECCION, "type")
+        db.crear_indice(TradeEventModel.COLECCION, "created_at")
+
+    @staticmethod
+    def registrar_evento(trade_id: str, telegram_id: int, event_type: str, payload: Optional[Dict[str, Any]] = None):
+        return db.insertar_documento(
+            TradeEventModel.COLECCION,
+            {
+                "trade_id": trade_id,
+                "telegram_id": telegram_id,
+                "type": event_type,
+                "payload": payload or {},
+                "created_at": datetime.utcnow(),
+            },
+        )
+
+    @staticmethod
+    def obtener_eventos(filtro: Dict[str, Any], limit: int = 100):
+        return db.buscar_todos_documentos(
+            TradeEventModel.COLECCION,
+            filtro,
+            sort=[("created_at", DESCENDING)],
+            limit=limit,
+        )
+
+
 def ensure_indexes() -> None:
     UsuarioModel.ensure_indexes()
     OperacionModel.ensure_indexes()
     ReferidoModel.ensure_indexes()
     FeeModel.ensure_indexes()
     PaymentInvoiceModel.ensure_indexes()
+    TradeStateModel.ensure_indexes()
+    TradeEventModel.ensure_indexes()
