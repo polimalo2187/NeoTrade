@@ -1,19 +1,14 @@
-class FeeCalculator:
-    """
-    Calcula la fee del administrador y la comisión del referidor
-    basada en las ganancias de cada operación.
-    """
+from app.config import FEE_ADMIN_PORC, FEE_REFERIDO_PORC
 
-    def __init__(self, fee_admin=0.12, fee_referido=0.03):
+
+class FeeCalculator:
+    def __init__(self, fee_admin=FEE_ADMIN_PORC, fee_referido=FEE_REFERIDO_PORC):
         self.fee_admin = fee_admin
         self.fee_referido = fee_referido
 
     def calcular_fee(self, ganancia):
-        """
-        Calcula la fee del administrador y la comisión del referidor.
-        Retorna un diccionario con los valores calculados.
-        """
+        ganancia = max(float(ganancia or 0), 0.0)
         return {
             "admin": ganancia * self.fee_admin,
-            "referido": ganancia * self.fee_referido
+            "referido": ganancia * self.fee_referido,
         }
