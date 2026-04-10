@@ -26,6 +26,7 @@ from app.config import (
     TREND_PERIOD_SECONDS,
 )
 from app.exchange import CoinWApiError, ExchangeClient
+from app.fee_manager import FeeManager
 from app.models import OperacionModel, UsuarioModel
 from app.mtf_strategy import MTFStrategy
 
@@ -54,6 +55,7 @@ class TradingEngine:
     def __init__(self):
         self.strategy = MTFStrategy()
         self.notifier = TelegramNotifier(TELEGRAM_BOT_TOKEN)
+        self.fee_manager = FeeManager()
         self.running = False
         self._thread: Optional[threading.Thread] = None
         self._last_symbols_refresh = 0.0
@@ -101,6 +103,9 @@ class TradingEngine:
                 if active_position:
                     self._manage_open_position(usuario, client)
                 else:
+                    existing_invoice = self.fee_manager.ensure_invoice_if_threshold_reached(telegram_id)
+                    if existing_invoice:
+                        continue
                     self._scan_and_open_trade(usuario, client, candidate_symbols)
                 UsuarioModel.actualizar_engine_error(telegram_id, None)
             except CoinWApiError as exc:
@@ -310,17 +315,34 @@ class TradingEngine:
             },
         )
 
-        self.notifier.send(
-            telegram_id,
-            (
-                f"{'🟢' if pnl_quote > 0 else '🔴'} Posición cerrada\n"
-                f"Par: {symbol}\n"
-                f"Motivo: {close_reason}\n"
-                f"Entrada: {float(entry_price):.8f}\n"
-                f"Salida: {float(exit_price):.8f}\n"
-                f"PnL: {float(pnl_quote):.8f} {rule.quote_asset} ({float(pnl_pct):.2f}%)"
-            ),
+        operacion_cerrada = OperacionModel.obtener_operacion(
+            {"telegram_id": telegram_id, "order_number": position["order_number"]}
+        ) or {
+            "telegram_id": telegram_id,
+            "order_number": position["order_number"],
+            "pnl_quote": float(pnl_quote),
+        }
+        fee_generada = self.fee_manager.registrar_fee_operacion(usuario, operacion_cerrada)
+        invoice = self.fee_manager.ensure_invoice_if_threshold_reached(telegram_id)
+
+        message = (
+            f"{'🟢' if pnl_quote > 0 else '🔴'} Posición cerrada\n"
+            f"Par: {symbol}\n"
+            f"Motivo: {close_reason}\n"
+            f"Entrada: {float(entry_price):.8f}\n"
+            f"Salida: {float(exit_price):.8f}\n"
+            f"PnL: {float(pnl_quote):.8f} {rule.quote_asset} ({float(pnl_pct):.2f}%)"
         )
+        if fee_generada > 0:
+            message += f"\nFee admin generada: {fee_generada:.8f} {rule.quote_asset}"
+        if invoice:
+            message += (
+                f"\n\n⛔ Trading pausado por fee acumulada."
+                f"\nFactura: {invoice['invoice_id']}"
+                f"\nMonto: {float(invoice['invoice_amount']):.2f} {invoice['asset']}"
+            )
+
+        self.notifier.send(telegram_id, message)
 
     def _evaluate_symbol(self, symbol: str) -> Optional[Dict]:
         try:
