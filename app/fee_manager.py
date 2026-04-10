@@ -1,49 +1,41 @@
 from datetime import datetime
+
 from app.fee_calculator import FeeCalculator
-from app.models import UsuarioModel, ReferidoModel
+from app.models import FeeModel, ReferidoModel, UsuarioModel
+
 
 class FeeManager:
-    """
-    Gestiona el cobro diario de las fees de los usuarios.
-    """
-
     def __init__(self):
         self.calculadora = FeeCalculator()
 
     def cobrar_fee_diaria(self, usuarios):
-        """
-        Calcula y registra la fee de cada usuario.
-        Ejecutarse a las 12:00 hora Cuba.
-        usuarios: lista de objetos Usuario
-        """
         for usuario in usuarios:
-            # Solo usuarios activos
-            if not getattr(usuario, "bot_activo", False):
-                continue
+            telegram_id = usuario["telegram_id"] if isinstance(usuario, dict) else getattr(usuario, "telegram_id")
+            operaciones = []
+            if isinstance(usuario, dict):
+                operaciones = usuario.get("operaciones_cerradas_dia", [])
+                referidor_id = usuario.get("referidor_id")
+            else:
+                operaciones = getattr(usuario, "operaciones_cerradas_dia", [])
+                referidor_id = getattr(usuario, "referidor_id", None)
 
-            # Iterar sobre operaciones cerradas del día
-            operaciones = getattr(usuario, "operaciones_cerradas_dia", [])
-            total_fee_admin = 0
-            total_comision_referido = 0
-
+            total_fee_admin = 0.0
+            total_comision_referido = 0.0
             for operacion in operaciones:
-                ganancia = operacion.get("ganancia", 0)
+                ganancia = operacion.get("ganancia", operacion.get("pnl_quote", 0))
                 fee = self.calculadora.calcular_fee(ganancia)
+                total_fee_admin += fee["admin"]
+                if referidor_id:
+                    total_comision_referido += fee["referido"]
+                    ReferidoModel.actualizar_ganancia_referido(referidor_id, fee["referido"])
 
-                # Fee del administrador
-                total_fee_admin += fee.get("admin", 0)
-
-                # Comision del referidor
-                if hasattr(usuario, "referidor_id") and usuario.referidor_id:
-                    comision = fee.get("referidor", 0)
-                    total_comision_referido += comision
-                    # Actualizar ganancia del referidor en la base de datos
-                    ReferidoModel.actualizar_ganancia_referido(usuario.referidor_id, comision)
-
-            # Actualizar fee acumulada del usuario en la DB
-            UsuarioModel.actualizar_fee(usuario.telegram_id, total_fee_admin)
-
-            # Restablecer operaciones cerradas del día
-            usuario.operaciones_cerradas_dia = []
-
-        print(f"✅ Fee diaria cobrada a todos los usuarios a las {datetime.now().strftime('%H:%M:%S')}")
+            if total_fee_admin > 0:
+                FeeModel.registrar_fee(
+                    {
+                        "telegram_id": telegram_id,
+                        "fee_admin": total_fee_admin,
+                        "fee_referido": total_comision_referido,
+                        "fecha": datetime.utcnow(),
+                    }
+                )
+                UsuarioModel.incrementar_stats(telegram_id, {"pnl_quote": -total_fee_admin})
