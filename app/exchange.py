@@ -220,9 +220,18 @@ class ExchangeClient:
         df = df.dropna(subset=["open", "high", "low", "close", "volume"]).sort_values("date")
         return df.reset_index(drop=True)
 
+    def _drop_incomplete_last_candle(self, df: pd.DataFrame, period_seconds: int, reference_end_ms: int) -> pd.DataFrame:
+        if df.empty:
+            return df
+        last_open_ms = int(pd.Timestamp(df.iloc[-1]["date"]).timestamp() * 1000)
+        if last_open_ms + (period_seconds * 1000) > int(reference_end_ms):
+            return df.iloc[:-1].reset_index(drop=True)
+        return df
+
     def obtener_klines(self, symbol: str, period_seconds: int, limit: int = 120) -> pd.DataFrame:
         now_ms = int(time.time() * 1000)
-        start_ms = now_ms - (period_seconds * limit * 1000)
+        fetch_limit = max(limit + 2, limit)
+        start_ms = now_ms - (period_seconds * fetch_limit * 1000)
         payload = self._public_request(
             "returnChartData",
             {
@@ -233,8 +242,9 @@ class ExchangeClient:
             },
         )
         df = self._parse_klines_payload(payload, symbol)
+        df = self._drop_incomplete_last_candle(df, period_seconds, now_ms)
         if df.empty:
-            raise CoinWApiError(f"No se recibieron velas para {symbol} en {period_seconds}s")
+            raise CoinWApiError(f"No se recibieron velas cerradas para {symbol} en {period_seconds}s")
         return df.tail(limit).reset_index(drop=True)
 
     def obtener_klines_rango(self, symbol: str, period_seconds: int, start_ms: int, end_ms: int) -> pd.DataFrame:
@@ -249,7 +259,8 @@ class ExchangeClient:
                 "end": int(end_ms),
             },
         )
-        return self._parse_klines_payload(payload, symbol)
+        df = self._parse_klines_payload(payload, symbol)
+        return self._drop_incomplete_last_candle(df, period_seconds, int(end_ms) + (period_seconds * 1000))
 
     def obtener_ordenes_abiertas(self, symbol: str) -> List[Dict[str, Any]]:
         payload = self._private_request("returnOpenOrders", {"currencyPair": symbol.upper()})
