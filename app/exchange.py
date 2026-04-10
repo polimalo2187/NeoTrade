@@ -3,6 +3,7 @@ import logging
 import time
 import urllib.parse
 import uuid
+from json import JSONDecodeError
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_DOWN, InvalidOperation
 from typing import Any, Dict, List, Optional
@@ -17,7 +18,12 @@ logger = logging.getLogger(__name__)
 
 
 class CoinWApiError(Exception):
-    pass
+    def __init__(self, message: str, payload: Optional[Dict[str, Any]] = None, status_code: Optional[int] = None):
+        super().__init__(message)
+        self.payload = payload or {}
+        self.status_code = status_code
+
+
 
 
 @dataclass
@@ -92,16 +98,41 @@ class ExchangeClient:
         query = urllib.parse.urlencode(params)
         url = f"{self.base_url}{self.PRIVATE_ENDPOINT}?command={command}&sign={sign}&{query}"
 
-        response = self.session.request(
-            method=method.upper(),
-            url=url,
-            headers={"Content-Type": "application/json"},
-            timeout=self.timeout,
-        )
-        response.raise_for_status()
-        payload = response.json()
+        try:
+            response = self.session.request(
+                method=method.upper(),
+                url=url,
+                headers={"Content-Type": "application/json"},
+                data={} if method.upper() == "POST" else None,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            status_code = exc.response.status_code if exc.response is not None else None
+            body = exc.response.text if exc.response is not None else ""
+            if status_code in {401, 403, 451}:
+                raise CoinWApiError(
+                    f"CoinW rechazó la solicitud HTTP {status_code}. Revisa permisos Spot, whitelist de IP del servidor y posibles restricciones regionales.",
+                    status_code=status_code,
+                ) from exc
+            raise CoinWApiError(
+                f"Error HTTP contra CoinW: {status_code or 'desconocido'} {body[:300]}",
+                status_code=status_code,
+            ) from exc
+        try:
+            payload = response.json()
+        except JSONDecodeError as exc:
+            raise CoinWApiError(f"CoinW devolvió una respuesta no JSON: {response.text[:300]}", status_code=response.status_code) from exc
+
         if not self._is_success(payload):
-            raise CoinWApiError(payload.get("msg") or str(payload))
+            code = str(payload.get("code", ""))
+            if code == "6000":
+                raise CoinWApiError(
+                    "CoinW devolvió code 6000 (auth/API error). Causas típicas: API Key/API Secret incorrectas, API deshabilitada o borrada, permiso Spot API no habilitado, whitelist sin la IP pública del servidor, o IP/región restringida.",
+                    payload=payload,
+                    status_code=response.status_code,
+                )
+            raise CoinWApiError(payload.get("msg") or payload.get("message") or str(payload), payload=payload, status_code=response.status_code)
         return payload
 
     def validar_credenciales(self) -> Dict[str, Any]:
