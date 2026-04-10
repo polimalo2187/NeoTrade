@@ -89,6 +89,15 @@ class FeeManager:
             credit_applied,
             None,
         )
+        logger.info(
+            "FEE_GENERADA | telegram_id=%s | order_number=%s | ganancia=%s | fee_generada=%s | credit_applied=%s | fee_due_total=%s",
+            telegram_id,
+            operacion.get("order_number"),
+            f"{ganancia:.8f}",
+            f"{fee_generada:.8f}",
+            f"{credit_applied:.8f}",
+            f"{nueva_deuda:.8f}",
+        )
         return fee_generada
 
     def ensure_invoice_if_threshold_reached(self, telegram_id: int) -> Optional[Dict]:
@@ -112,6 +121,14 @@ class FeeManager:
 
         invoice = self.crear_factura(usuario)
         UsuarioModel.aplicar_bloqueo_fee(telegram_id, invoice["invoice_id"])
+        logger.warning(
+            "FEE_LOCK_APLICADO | telegram_id=%s | invoice_id=%s | amount=%s %s | destination_uid=%s",
+            telegram_id,
+            invoice["invoice_id"],
+            f"{float(invoice.get('invoice_amount') or 0.0):.2f}",
+            invoice.get("asset", PAYMENT_ASSET),
+            invoice.get("destination_uid") or ADMIN_COINW_UID or "NO_CONFIGURADO",
+        )
         self.notifier.send(telegram_id, self.construir_instrucciones_pago(invoice))
         return invoice
 
@@ -175,6 +192,12 @@ class FeeManager:
             },
         )
         invoice = PaymentInvoiceModel.obtener_factura({"invoice_id": invoice["invoice_id"]})
+        logger.info(
+            "FEE_PAGO_REPORTADO | telegram_id=%s | invoice_id=%s | status=%s",
+            telegram_id,
+            invoice.get("invoice_id"),
+            invoice.get("status"),
+        )
         self._notificar_admins_reporte(invoice)
         return invoice
 
@@ -249,6 +272,14 @@ class FeeManager:
             )
             replacement_invoice = self.crear_factura(UsuarioModel.obtener_usuario({"telegram_id": telegram_id}))
             UsuarioModel.aplicar_bloqueo_fee(telegram_id, replacement_invoice["invoice_id"])
+            logger.warning(
+                "FEE_PAGO_PARCIAL | telegram_id=%s | invoice_id_anterior=%s | nueva_deuda=%s %s | nueva_factura=%s",
+                telegram_id,
+                invoice_id,
+                f"{nueva_deuda:.2f}",
+                PAYMENT_ASSET,
+                replacement_invoice["invoice_id"],
+            )
             self.notifier.send(
                 telegram_id,
                 (
