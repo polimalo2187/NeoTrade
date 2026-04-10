@@ -6,7 +6,8 @@ from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandle
 from app.admin_panel import AdminPanel
 from app.botones import BOTONES_CONFIGURACION, BOTONES_PRINCIPAL
 from app.config import ADMIN_TELEGRAM_IDS, TELEGRAM_BOT_TOKEN
-from app.mensajes import mensaje_capital, mensaje_configuracion, mensaje_historial, mensaje_referidos
+from app.fee_manager import FeeManager
+from app.mensajes import mensaje_capital, mensaje_configuracion, mensaje_fee, mensaje_historial, mensaje_referidos
 from app.models import OperacionModel, UsuarioModel
 from app.usuario import Usuario
 
@@ -21,6 +22,7 @@ class Bot:
     def __init__(self):
         self.app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
         self.admin_panel = AdminPanel()
+        self.fee_manager = FeeManager()
         self.app.add_handler(CommandHandler("start", self.start))
         self.app.add_handler(CallbackQueryHandler(self.boton_click))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.manejar_mensajes))
@@ -44,6 +46,8 @@ class Bot:
             )
         else:
             mensaje_bienvenida = f"¡Hola nuevamente {nombre_usuario}! 🤖"
+            if usuario_data.get("trading_pause_reason") == "fee_due":
+                mensaje_bienvenida += "\n⛔ Tienes el trading pausado por fee pendiente. Revisa el botón 💸 Fee."
 
         reply_markup = self._menu_for(usuario_id)
         await update.message.reply_text(mensaje_bienvenida, reply_markup=reply_markup)
@@ -67,6 +71,8 @@ class Bot:
             ("💰 Capital total usuarios", "admin_capital_total"),
             ("📊 Operaciones recientes", "admin_historial"),
             ("🔗 Referidos", "admin_referidos"),
+            ("🧾 Fees pendientes", "admin_fee_pendientes"),
+            ("⛔ Usuarios bloqueados", "admin_usuarios_bloqueados"),
         ]
         for text_btn, callback in admin_buttons:
             teclado.append([InlineKeyboardButton(text=text_btn, callback_data=callback)])
@@ -116,7 +122,12 @@ class Bot:
                 )
                 return
             UsuarioModel.set_bot_activo(telegram_id, True)
-            await query.edit_message_text("Bot activado ✅\nEl motor ya puede abrir operaciones Spot reales.", reply_markup=self._menu_for(telegram_id))
+            if usuario.get("trading_pause_reason") == "fee_due":
+                invoice = self.fee_manager.obtener_factura_usuario(telegram_id)
+                texto = "Bot activado ✅ pero el trading sigue bloqueado por fee pendiente.\n\n" + mensaje_fee(usuario, invoice)
+            else:
+                texto = "Bot activado ✅\nEl motor ya puede abrir operaciones Spot reales."
+            await query.edit_message_text(texto, reply_markup=self._menu_for(telegram_id))
             return
 
         if query.data == "🔴 Detener Bot":
@@ -152,6 +163,37 @@ class Bot:
 
         if query.data == "⚙️ Configuración":
             await query.edit_message_text(mensaje_configuracion(), reply_markup=self.menu_configuracion())
+            return
+
+        if query.data == "💸 Fee":
+            usuario = UsuarioModel.obtener_usuario({"telegram_id": telegram_id})
+            invoice = self.fee_manager.obtener_factura_usuario(telegram_id)
+            await query.edit_message_text(mensaje_fee(usuario, invoice), reply_markup=self._menu_for(telegram_id))
+            return
+
+        if query.data == "✅ Ya pagué fee":
+            invoice = self.fee_manager.obtener_factura_usuario(telegram_id)
+            if not invoice:
+                await query.edit_message_text(
+                    "No tienes una factura activa para reportar en este momento.",
+                    reply_markup=self._menu_for(telegram_id),
+                )
+                return
+            UsuarioModel.actualizar_usuario(
+                {"telegram_id": telegram_id},
+                {"estado": "esperando_reporte_fee"},
+            )
+            await query.edit_message_text(
+                (
+                    "Escribe un solo mensaje con los detalles del pago reportado.\n\n"
+                    "Ejemplo:\n"
+                    "Monto: 5 USDT\n"
+                    "Hora aproximada: 10:35\n"
+                    "Nota: transferencia interna CoinW realizada\n"
+                    f"Factura: {invoice.get('invoice_id')}"
+                ),
+                reply_markup=self._menu_for(telegram_id),
+            )
             return
 
         await query.edit_message_text(
@@ -202,6 +244,25 @@ class Bot:
                     f"No se pudo validar la API ❌\nMotivo: {error_msg}\nIntenta de nuevo. Introduce tu API Key:",
                     reply_markup=self._menu_for(telegram_id),
                 )
+            return
+
+        if usuario["estado"] == "esperando_reporte_fee":
+            invoice = self.fee_manager.reportar_pago(telegram_id, texto)
+            UsuarioModel.actualizar_usuario({"telegram_id": telegram_id}, {"estado": None})
+            if not invoice:
+                await update.message.reply_text(
+                    "No encontré una factura activa para reportar. Revisa primero el botón 💸 Fee.",
+                    reply_markup=self._menu_for(telegram_id),
+                )
+                return
+            await update.message.reply_text(
+                (
+                    "Pago reportado ✅\n\n"
+                    f"Factura: {invoice.get('invoice_id')}\n"
+                    "Tu reporte fue enviado al administrador. El trading seguirá pausado hasta confirmación manual."
+                ),
+                reply_markup=self._menu_for(telegram_id),
+            )
 
     def start_bot(self):
         logger.info("Iniciando polling de Telegram")
