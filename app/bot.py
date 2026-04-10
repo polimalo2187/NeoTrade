@@ -210,16 +210,17 @@ class Bot:
             return
 
         if usuario["estado"] == "esperando_api_key":
+            api_key = _normalize_api_credential(texto)
             UsuarioModel.actualizar_usuario(
                 {"telegram_id": telegram_id},
-                {"api_key_temp": texto, "estado": "esperando_api_secret"},
+                {"api_key_temp": api_key, "estado": "esperando_api_secret"},
             )
             await update.message.reply_text("Ahora introduce tu API Secret de CoinW:", reply_markup=self.menu_principal())
             return
 
         if usuario["estado"] == "esperando_api_secret":
-            api_key = usuario.get("api_key_temp")
-            api_secret = texto
+            api_key = _normalize_api_credential(usuario.get("api_key_temp") or "")
+            api_secret = _normalize_api_credential(texto)
             exito, error_msg = Usuario.validar_api(api_key, api_secret, return_error=True)
             if exito:
                 UsuarioModel.actualizar_usuario(
