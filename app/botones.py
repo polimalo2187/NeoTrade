@@ -1,7 +1,8 @@
 BOTONES_PRINCIPAL = [
     ["🟢 Activar Bot", "🔴 Detener Bot"],
     ["💰 Capital", "📊 Historial"],
-    ["🔗 Referidos", "⚙️ Configuración"],
+    ["🔗 Referidos", "💸 Fee"],
+    ["⚙️ Configuración", "✅ Ya pagué fee"],
 ]
 
 BOTONES_CONFIGURACION = [
@@ -18,6 +19,8 @@ BOTONES_ADMIN = [
     ["💰 Capital total usuarios"],
     ["📊 Operaciones recientes"],
     ["🔗 Referidos"],
+    ["🧾 Fees pendientes"],
+    ["⛔ Usuarios bloqueados"],
 ]
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
