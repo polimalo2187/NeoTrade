@@ -209,6 +209,17 @@ class ExchangeClient:
         symbols = [symbol for symbol, _ in candidates]
         return symbols[:max_pairs] if max_pairs else symbols
 
+    def _parse_klines_payload(self, payload: Dict[str, Any], symbol: str) -> pd.DataFrame:
+        rows = [row for row in payload.get("data", []) if str(row.get("pair", "")).upper() == symbol.upper()]
+        if not rows:
+            return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
+        df = pd.DataFrame(rows)
+        for col in ["open", "high", "low", "close", "volume"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df["date"] = pd.to_datetime(df["date"], unit="ms", utc=True)
+        df = df.dropna(subset=["open", "high", "low", "close", "volume"]).sort_values("date")
+        return df.reset_index(drop=True)
+
     def obtener_klines(self, symbol: str, period_seconds: int, limit: int = 120) -> pd.DataFrame:
         now_ms = int(time.time() * 1000)
         start_ms = now_ms - (period_seconds * limit * 1000)
@@ -221,16 +232,24 @@ class ExchangeClient:
                 "end": now_ms,
             },
         )
-        rows = [row for row in payload.get("data", []) if str(row.get("pair", "")).upper() == symbol.upper()]
-        if not rows:
+        df = self._parse_klines_payload(payload, symbol)
+        if df.empty:
             raise CoinWApiError(f"No se recibieron velas para {symbol} en {period_seconds}s")
+        return df.tail(limit).reset_index(drop=True)
 
-        df = pd.DataFrame(rows)
-        for col in ["open", "high", "low", "close", "volume"]:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-        df["date"] = pd.to_datetime(df["date"], unit="ms", utc=True)
-        df = df.dropna(subset=["open", "high", "low", "close", "volume"]).sort_values("date").tail(limit)
-        return df.reset_index(drop=True)
+    def obtener_klines_rango(self, symbol: str, period_seconds: int, start_ms: int, end_ms: int) -> pd.DataFrame:
+        if end_ms <= start_ms:
+            return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
+        payload = self._public_request(
+            "returnChartData",
+            {
+                "currencyPair": symbol.upper(),
+                "period": period_seconds,
+                "start": int(start_ms),
+                "end": int(end_ms),
+            },
+        )
+        return self._parse_klines_payload(payload, symbol)
 
     def obtener_ordenes_abiertas(self, symbol: str) -> List[Dict[str, Any]]:
         payload = self._private_request("returnOpenOrders", {"currencyPair": symbol.upper()})
