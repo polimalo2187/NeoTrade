@@ -247,6 +247,7 @@ class TradingEngine:
                 "base_asset": rule.base_asset,
                 "components": best_signal["components"],
                 "manager_rules": best_signal["manager_rules"],
+                "strategy_meta": best_signal.get("strategy_meta") or {},
             }
         )
         logger.info(
@@ -335,6 +336,7 @@ class TradingEngine:
                     "entry": ENTRY_PERIOD_SECONDS,
                 },
                 "manager_rules": signal["manager_rules"],
+                "meta": signal.get("strategy_meta") or {},
             },
         }
         return position
@@ -385,6 +387,7 @@ class TradingEngine:
                 "components": [],
                 "timeframes": {"trend": TREND_PERIOD_SECONDS, "pullback": PULLBACK_PERIOD_SECONDS, "entry": ENTRY_PERIOD_SECONDS},
                 "manager_rules": {},
+                "meta": position.get("strategy", {}).get("meta") or {},
             },
         }
         self._persist_trade_state(telegram_id, state)
