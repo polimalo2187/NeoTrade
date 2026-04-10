@@ -1,101 +1,74 @@
-import os
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from app.wallet import WalletAdmin
-from app.models import UsuarioModel, OperacionModel, ReferidoModel
-
-
-# ========================================
-# IDs de administrador desde variable de entorno
-# ========================================
-ADMIN_TELEGRAM_IDS = os.environ.get("ADMIN_TELEGRAM_IDS", "")
-if ADMIN_TELEGRAM_IDS:
-    # Convertimos la cadena "123,456,789" en lista de ints
-    ADMIN_TELEGRAM_IDS = [int(x.strip()) for x in ADMIN_TELEGRAM_IDS.split(",")]
-else:
-    ADMIN_TELEGRAM_IDS = []  # Ningún admin si no está configurado
+from app.config import ADMIN_TELEGRAM_IDS
+from app.models import OperacionModel, ReferidoModel, UsuarioModel
 
 
 class AdminPanel:
-    """
-    Panel de administrador en Telegram, controlado por ID de Telegram.
-    """
-
-    def __init__(self):
-        self.wallet = WalletAdmin()
-
     def es_admin(self, telegram_id: int) -> bool:
-        """
-        Verifica si el usuario es administrador por su ID de Telegram.
-        """
         return telegram_id in ADMIN_TELEGRAM_IDS
 
     def menu_administrador(self):
-        """
-        Retorna el teclado con opciones de administrador.
-        """
         keyboard = [
-            [InlineKeyboardButton("🟢 Activar/Detener usuario", callback_data="activar_detener")],
-            [InlineKeyboardButton("💰 Capital total de usuarios", callback_data="capital_total")],
-            [InlineKeyboardButton("📊 Historial completo", callback_data="historial_completo")],
-            [InlineKeyboardButton("🔗 Comisiones de referidos", callback_data="comisiones_referidos")],
-            [InlineKeyboardButton("⚙️ Configuración avanzada", callback_data="configuracion_avanzada")]
+            [InlineKeyboardButton("👥 Usuarios activos", callback_data="admin_usuarios_activos")],
+            [InlineKeyboardButton("💰 Capital total usuarios", callback_data="admin_capital_total")],
+            [InlineKeyboardButton("📊 Operaciones recientes", callback_data="admin_historial")],
+            [InlineKeyboardButton("🔗 Referidos", callback_data="admin_referidos")],
         ]
         return InlineKeyboardMarkup(keyboard)
 
     async def manejar_click(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """
-        Maneja los clicks del panel de administrador.
-        """
         query = update.callback_query
         telegram_id = query.from_user.id
 
         if not self.es_admin(telegram_id):
             await query.answer("❌ No tienes permisos de administrador", show_alert=True)
-            return
+            return True
 
-        await query.answer()
         accion = query.data
+        if not accion.startswith("admin_"):
+            return False
 
-        if accion == "activar_detener":
+        if accion == "admin_usuarios_activos":
+            usuarios = UsuarioModel.obtener_usuarios_activos()
+            activos = len(usuarios)
+            con_posicion = sum(1 for u in usuarios if u.get("active_position"))
             await query.edit_message_text(
-                "Función de activar/detener usuarios pendiente de implementación"
+                f"👥 Usuarios activos: {activos}\n📍 Con posición abierta: {con_posicion}"
             )
+            return True
 
-        elif accion == "capital_total":
+        if accion == "admin_capital_total":
             usuarios = UsuarioModel.obtener_todos_usuarios()
-            total_capital = sum(u.get("capital_total", 0) for u in usuarios)
+            total_capital = sum(float(u.get("capital_total", 0) or 0) for u in usuarios)
             await query.edit_message_text(
-                f"💰 Capital total de todos los usuarios: {total_capital:.2f} USDT"
+                f"💰 Capital total estimado de usuarios: {total_capital:.4f} USDT"
             )
+            return True
 
-        elif accion == "historial_completo":
-            operaciones = OperacionModel.obtener_operaciones({})
+        if accion == "admin_historial":
+            operaciones = OperacionModel.obtener_operaciones({}, limit=10)
             if not operaciones:
-                mensaje = "No hay operaciones registradas aún."
-            else:
-                mensaje = "\n".join(
-                    f"{o.get('telegram_id')}: {o.get('ganancia', 0)} USDT"
-                    for o in operaciones
-                )
-            await query.edit_message_text(f"📊 Historial completo:\n{mensaje}")
+                await query.edit_message_text("No hay operaciones registradas aún.")
+                return True
+            mensaje = "📊 Operaciones recientes:\n\n" + "\n\n".join(
+                f"{op.get('telegram_id')} | {op.get('symbol')} | {op.get('status')} | PnL {op.get('pnl_quote', 0):.4f}"
+                for op in operaciones
+            )
+            await query.edit_message_text(mensaje[:4096])
+            return True
 
-        elif accion == "comisiones_referidos":
+        if accion == "admin_referidos":
             referidos = ReferidoModel.obtener_referidos({})
             if not referidos:
-                mensaje = "No hay comisiones registradas aún."
-            else:
-                mensaje = "\n".join(
-                    f"{r.get('referidor_id')}: {r.get('comision', 0)} USDT"
-                    for r in referidos
-                )
-            await query.edit_message_text(f"🔗 Comisiones de referidos:\n{mensaje}")
-
-        elif accion == "configuracion_avanzada":
-            await query.edit_message_text(
-                "⚙️ Configuración avanzada pendiente de implementación"
+                await query.edit_message_text("No hay referidos registrados.")
+                return True
+            mensaje = "🔗 Referidos:\n\n" + "\n".join(
+                f"ref {r.get('referidor_id')} -> usr {r.get('referido_id')} | comisión {r.get('comision', 0):.4f}"
+                for r in referidos[:20]
             )
+            await query.edit_message_text(mensaje[:4096])
+            return True
 
-        else:
-            await query.edit_message_text("Opción no reconocida ❌")
+        return False
