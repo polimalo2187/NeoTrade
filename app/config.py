@@ -43,12 +43,13 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 # =========================
 COINW_BASE_URL = os.getenv("COINW_BASE_URL", "https://api.coinw.com")
 QUOTE_ASSET = os.getenv("QUOTE_ASSET", "USDT").upper()
-CAPITAL_ACTIVO_PORC = _env_float("CAPITAL_ACTIVO_PORC", 0.30)
+# Producción: usar prácticamente todo el saldo útil dejando un pequeño colchón.
+CAPITAL_ACTIVO_PORC = min(max(_env_float("CAPITAL_ACTIVO_PORC", 0.995), 0.0), 1.0)
 STOP_LOSS_PORC = _env_float("STOP_LOSS_PORC", 0.02)
 TAKE_PROFIT_PORC = _env_float("TAKE_PROFIT_PORC", 0.04)
 MIN_SIGNAL_SCORE = _env_float("MIN_SIGNAL_SCORE", 70.0)
 MIN_24H_QUOTE_VOLUME = _env_float("MIN_24H_QUOTE_VOLUME", 1_000_000.0)
-MIN_USDT_ORDER = _env_float("MIN_USDT_ORDER", 6.0)
+MIN_USDT_ORDER = _env_float("MIN_USDT_ORDER", 5.0)
 DEFAULT_SYMBOLS = [symbol.upper() for symbol in _env_list("DEFAULT_SYMBOLS")]
 MAX_SYMBOLS_TO_SCAN = _env_int("MAX_SYMBOLS_TO_SCAN", 8)
 SCAN_INTERVAL_SECONDS = _env_int("SCAN_INTERVAL_SECONDS", 30)
@@ -78,11 +79,15 @@ MAX_SCORE = _env_int("MAX_SCORE", 100)
 # Administradores
 # =========================
 ADMIN_TELEGRAM_IDS = [int(item) for item in _env_list("ADMIN_TELEGRAM_IDS")]
+ADMIN_COINW_UID = os.getenv("ADMIN_COINW_UID", "").strip()
 
 # =========================
-# Scheduler / referidos
+# Fees / pagos manuales internos
 # =========================
-FEE_ADMIN_PORC = _env_float("FEE_ADMIN_PORC", 0.12)
+FEE_ADMIN_PORC = _env_float("FEE_ADMIN_PORC", 0.15)
 FEE_REFERIDO_PORC = _env_float("FEE_REFERIDO_PORC", 0.03)
+FEE_SETTLEMENT_THRESHOLD = _env_float("FEE_SETTLEMENT_THRESHOLD", 5.0)
+PAYMENT_ASSET = os.getenv("PAYMENT_ASSET", "USDT").upper().strip()
+PAYMENT_METHOD = os.getenv("PAYMENT_METHOD", "coinw_internal").strip().lower()
 HORARIO_COBRO_FEE = os.getenv("HORARIO_COBRO_FEE", "12:00")
 HORARIO_PAGO_REFERIDOS = os.getenv("HORARIO_PAGO_REFERIDOS", "14:00")
