@@ -52,6 +52,17 @@ class TelegramNotifier:
 
 
 class TradingEngine:
+    @staticmethod
+    def _fmt(value: object, decimals: int = 8) -> str:
+        try:
+            return f"{float(value):.{decimals}f}"
+        except Exception:
+            return str(value)
+
+    @staticmethod
+    def _user_name(usuario: Dict) -> str:
+        return str(usuario.get("nombre") or usuario.get("telegram_id"))
+
     def __init__(self):
         self.strategy = MTFStrategy()
         self.notifier = TelegramNotifier(TELEGRAM_BOT_TOKEN)
@@ -229,6 +240,24 @@ class TradingEngine:
                 "components": best_signal["components"],
             }
         )
+        logger.info(
+            "OPERACION_ABIERTA | telegram_id=%s | usuario=%s | symbol=%s | order_number=%s | capital_disponible=%s %s | capital_usado=%s %s | cantidad=%s %s | entry=%s | sl=%s | tp=%s | score=%s | dry_run=%s",
+            telegram_id,
+            self._user_name(usuario),
+            best_signal["symbol"],
+            order_number,
+            self._fmt(available_quote),
+            rule.quote_asset,
+            self._fmt(quote_to_use),
+            rule.quote_asset,
+            self._fmt(amount),
+            rule.base_asset,
+            self._fmt(fallback_price),
+            self._fmt(best_signal["stop_loss"]),
+            self._fmt(best_signal["take_profit"]),
+            self._fmt(best_signal["score"], 2),
+            DRY_RUN,
+        )
         self.notifier.send(
             telegram_id,
             (
@@ -335,7 +364,42 @@ class TradingEngine:
         )
         if fee_generada > 0:
             message += f"\nFee admin generada: {fee_generada:.8f} {rule.quote_asset}"
+        available_quote_after = None
+        try:
+            available_quote_after = client.obtener_balance_disponible(rule.quote_asset)
+        except Exception:
+            logger.debug("No se pudo obtener balance posterior al cierre para usuario %s", telegram_id)
+
+        logger.info(
+            "OPERACION_CERRADA | telegram_id=%s | usuario=%s | symbol=%s | close_reason=%s | entry=%s | exit=%s | cantidad=%s %s | pnl=%s %s | pnl_pct=%s | fee_generada=%s %s | deuda_fee=%s %s | capital_posterior=%s %s | invoice_id=%s",
+            telegram_id,
+            self._user_name(usuario),
+            symbol,
+            close_reason,
+            self._fmt(entry_price),
+            self._fmt(exit_price),
+            self._fmt(quantity),
+            rule.base_asset,
+            self._fmt(pnl_quote),
+            rule.quote_asset,
+            self._fmt(pnl_pct, 2),
+            self._fmt(fee_generada),
+            rule.quote_asset,
+            self._fmt(float((UsuarioModel.obtener_usuario({"telegram_id": telegram_id}) or {}).get("fee_due_total") or 0.0)),
+            rule.quote_asset,
+            self._fmt(available_quote_after) if available_quote_after is not None else "N/A",
+            rule.quote_asset,
+            invoice.get("invoice_id") if invoice else "none",
+        )
         if invoice:
+            logger.warning(
+                "TRADING_BLOQUEADO_FEE | telegram_id=%s | usuario=%s | invoice_id=%s | amount=%s %s",
+                telegram_id,
+                self._user_name(usuario),
+                invoice["invoice_id"],
+                self._fmt(invoice["invoice_amount"], 2),
+                invoice["asset"],
+            )
             message += (
                 f"\n\n⛔ Trading pausado por fee acumulada."
                 f"\nFactura: {invoice['invoice_id']}"
