@@ -1,29 +1,88 @@
 import os
+from typing import List
 
-# Porcentaje del capital total del usuario que se utiliza en cada operación
-CAPITAL_ACTIVO_PORC = float(os.getenv("CAPITAL_ACTIVO_PORC", 0.3))
 
-# Stop Loss fijo por operación
-STOP_LOSS_PORC = float(os.getenv("STOP_LOSS_PORC", 0.03))
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on", "si", "sí"}
 
-# Porcentaje de fee del administrador y referidor
-FEE_ADMIN_PORC = float(os.getenv("FEE_ADMIN_PORC", 0.12))
-FEE_REFERIDO_PORC = float(os.getenv("FEE_REFERIDO_PORC", 0.03))
 
-# Horarios de cobro y pago (hora de Cuba)
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    return int(value)
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    return float(value)
+
+
+def _env_list(name: str) -> List[str]:
+    value = os.getenv(name, "")
+    if not value.strip():
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+# =========================
+# Infraestructura
+# =========================
+MONGODB_URI = os.getenv("MONGODB_URI")
+MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+# =========================
+# CoinW / Trading
+# =========================
+COINW_BASE_URL = os.getenv("COINW_BASE_URL", "https://api.coinw.com")
+QUOTE_ASSET = os.getenv("QUOTE_ASSET", "USDT").upper()
+CAPITAL_ACTIVO_PORC = _env_float("CAPITAL_ACTIVO_PORC", 0.30)
+STOP_LOSS_PORC = _env_float("STOP_LOSS_PORC", 0.02)
+TAKE_PROFIT_PORC = _env_float("TAKE_PROFIT_PORC", 0.04)
+MIN_SIGNAL_SCORE = _env_float("MIN_SIGNAL_SCORE", 70.0)
+MIN_24H_QUOTE_VOLUME = _env_float("MIN_24H_QUOTE_VOLUME", 1_000_000.0)
+MIN_USDT_ORDER = _env_float("MIN_USDT_ORDER", 6.0)
+DEFAULT_SYMBOLS = [symbol.upper() for symbol in _env_list("DEFAULT_SYMBOLS")]
+MAX_SYMBOLS_TO_SCAN = _env_int("MAX_SYMBOLS_TO_SCAN", 8)
+SCAN_INTERVAL_SECONDS = _env_int("SCAN_INTERVAL_SECONDS", 30)
+SYMBOL_REFRESH_SECONDS = _env_int("SYMBOL_REFRESH_SECONDS", 300)
+CANDLE_LIMIT = _env_int("CANDLE_LIMIT", 120)
+DRY_RUN = _env_bool("DRY_RUN", False)
+ENABLE_TRADING_ENGINE = _env_bool("ENABLE_TRADING_ENGINE", True)
+ENABLE_SCHEDULER = _env_bool("ENABLE_SCHEDULER", False)
+
+# CoinW Spot documenta 5m, 15m y 2h/4h; 1h no aparece en la lista oficial.
+TREND_PERIOD_SECONDS = _env_int("TREND_PERIOD_SECONDS", 7200)
+PULLBACK_PERIOD_SECONDS = _env_int("PULLBACK_PERIOD_SECONDS", 900)
+ENTRY_PERIOD_SECONDS = _env_int("ENTRY_PERIOD_SECONDS", 300)
+
+# =========================
+# Estrategia
+# =========================
+EMA_FAST = _env_int("EMA_FAST", 20)
+EMA_SLOW = _env_int("EMA_SLOW", 50)
+RSI_PERIOD = _env_int("RSI_PERIOD", 14)
+RSI_TREND_MIN = _env_int("RSI_TREND_MIN", 52)
+RSI_PULLBACK_MIN = _env_int("RSI_PULLBACK_MIN", 45)
+RSI_PULLBACK_MAX = _env_int("RSI_PULLBACK_MAX", 58)
+MAX_SCORE = _env_int("MAX_SCORE", 100)
+
+# =========================
+# Administradores
+# =========================
+ADMIN_TELEGRAM_IDS = [int(item) for item in _env_list("ADMIN_TELEGRAM_IDS")]
+
+# =========================
+# Scheduler / referidos
+# =========================
+FEE_ADMIN_PORC = _env_float("FEE_ADMIN_PORC", 0.12)
+FEE_REFERIDO_PORC = _env_float("FEE_REFERIDO_PORC", 0.03)
 HORARIO_COBRO_FEE = os.getenv("HORARIO_COBRO_FEE", "12:00")
 HORARIO_PAGO_REFERIDOS = os.getenv("HORARIO_PAGO_REFERIDOS", "14:00")
-
-# Configuración de la estrategia
-EMA_FAST = int(os.getenv("EMA_FAST", 20))
-EMA_SLOW = int(os.getenv("EMA_SLOW", 50))
-RSI_PERIOD = int(os.getenv("RSI_PERIOD", 14))
-RSI_TREND_MIN = int(os.getenv("RSI_TREND_MIN", 50))
-RSI_PULLBACK_MIN = int(os.getenv("RSI_PULLBACK_MIN", 45))
-RSI_PULLBACK_MAX = int(os.getenv("RSI_PULLBACK_MAX", 55))
-
-# Score máximo de la estrategia
-MAX_SCORE = int(os.getenv("MAX_SCORE", 100))
-
-# Administradores de Telegram (IDs)
-ADMIN_TELEGRAM_IDS = list(map(int, os.getenv("ADMIN_TELEGRAM_IDS", "").split(","))) if os.getenv("ADMIN_TELEGRAM_IDS") else []
