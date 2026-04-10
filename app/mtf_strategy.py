@@ -1,33 +1,48 @@
-from decimal import Decimal
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
 from app.config import (
+    ATR_PERIOD,
+    BREAK_EVEN_OFFSET_R,
     DYNAMIC_TP_ACTIVATION_R,
     EMA_FAST,
     EMA_SLOW,
+    ENTRY_MIN_BODY_RATIO,
+    ENTRY_MIN_CLOSE_POSITION,
+    ENTRY_MIN_VOLUME_RATIO,
+    MAX_ATR_PCT,
     MAX_SCORE,
+    MAX_STOP_DISTANCE_PCT,
+    MIN_ATR_PCT,
     MIN_SIGNAL_SCORE,
+    PULLBACK_LOOKBACK,
+    PULLBACK_MAX_DEPTH_PCT,
+    PULLBACK_MIN_DEPTH_PCT,
     RECENT_SWING_LOOKBACK,
     RSI_PERIOD,
     RSI_PULLBACK_MAX,
     RSI_PULLBACK_MIN,
     RSI_TREND_MIN,
     STOP_LOSS_PORC,
+    TRAIL_STOP_ATR_MULTIPLIER,
+    TREND_EMA_FAST_SLOPE_MIN,
+    TREND_EMA_SLOW_SLOPE_MIN,
     WEAKNESS_CONFIRMATIONS_REQUIRED,
     WEAKNESS_MIN_SCORE,
+    WEAKNESS_RSI_DELTA,
 )
 
 
 class MTFStrategy:
-    """Estrategia MTF LONG para Spot con manager persistente.
+    """Estrategia MTF LONG endurecida para Spot con manager persistente.
 
-    La estrategia decide:
-    - entrada
-    - SL mental inicial
-    - precio de activación del TP dinámico
-    - salida por pérdida de fuerza
+    Filosofía:
+    - detectar tendencia sana, no solo cruces de EMA
+    - exigir pullback real y no mera lateralidad
+    - entrar solo con reclaim/continuación de calidad
+    - rechazar stops demasiado anchos si se usa casi todo el capital
+    - gestionar la salida con activación dinámica + trailing mental + pérdida de fuerza
     """
 
     @staticmethod
@@ -37,9 +52,45 @@ class MTFStrategy:
         loss = -delta.clip(upper=0)
         avg_gain = gain.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
         avg_loss = loss.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
-        rs = avg_gain / avg_loss.replace(0, pd.NA)
+        avg_loss_safe = avg_loss.mask(avg_loss == 0)
+        rs = avg_gain / avg_loss_safe
         rsi = 100 - (100 / (1 + rs))
-        return rsi.fillna(50)
+        rsi = rsi.where(avg_loss != 0, 100.0)
+        rsi = rsi.where(~((avg_gain == 0) & (avg_loss == 0)), 50.0)
+        return pd.to_numeric(rsi, errors="coerce").fillna(50.0)
+
+    @staticmethod
+    def _atr(df: pd.DataFrame, period: int) -> pd.Series:
+        prev_close = df["close"].shift(1)
+        tr = pd.concat(
+            [
+                (df["high"] - df["low"]).abs(),
+                (df["high"] - prev_close).abs(),
+                (df["low"] - prev_close).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        return tr.ewm(alpha=1 / period, adjust=False, min_periods=period).mean().bfill()
+
+    @staticmethod
+    def _body_ratio(row: pd.Series) -> float:
+        candle_range = max(float(row["high"] - row["low"]), 1e-12)
+        body = abs(float(row["close"] - row["open"]))
+        return body / candle_range
+
+    @staticmethod
+    def _close_position(row: pd.Series) -> float:
+        candle_range = max(float(row["high"] - row["low"]), 1e-12)
+        return (float(row["close"]) - float(row["low"])) / candle_range
+
+    @staticmethod
+    def _slope_pct(series: pd.Series, lookback: int = 3) -> float:
+        if len(series) <= lookback:
+            return 0.0
+        base = float(series.iloc[-1 - lookback])
+        if abs(base) < 1e-12:
+            return 0.0
+        return (float(series.iloc[-1]) - base) / base
 
     @staticmethod
     def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -47,36 +98,152 @@ class MTFStrategy:
         data["ema_fast"] = data["close"].ewm(span=EMA_FAST, adjust=False, min_periods=EMA_FAST).mean()
         data["ema_slow"] = data["close"].ewm(span=EMA_SLOW, adjust=False, min_periods=EMA_SLOW).mean()
         data["rsi"] = MTFStrategy._rsi(data["close"], RSI_PERIOD)
+        data["atr"] = MTFStrategy._atr(data, ATR_PERIOD)
+        data["atr_pct"] = (data["atr"] / data["close"].replace(0, pd.NA)).fillna(0.0)
         data["volume_sma"] = data["volume"].rolling(20, min_periods=1).mean()
+        data["volume_ratio"] = (data["volume"] / data["volume_sma"].replace(0, pd.NA)).fillna(1.0)
         data["date_ms"] = (pd.to_datetime(data["date"], utc=True).astype("int64") // 1_000_000).astype("int64")
-        return data
+        return data.dropna(subset=["ema_fast", "ema_slow", "rsi", "atr"]).reset_index(drop=True)
 
-    @staticmethod
-    def is_trend_bullish(df: pd.DataFrame) -> bool:
+    def _trend_filter(self, df: pd.DataFrame) -> Tuple[bool, float, List[Tuple[str, float]], Dict]:
         last = df.iloc[-1]
-        return bool(last["ema_fast"] > last["ema_slow"] and last["rsi"] >= RSI_TREND_MIN)
+        fast_slope = self._slope_pct(df["ema_fast"], 3)
+        slow_slope = self._slope_pct(df["ema_slow"], 3)
+        atr_pct = float(last["atr_pct"])
+        bullish_stack = float(last["ema_fast"]) > float(last["ema_slow"]) and float(last["close"]) > float(last["ema_fast"])
+        slope_ok = fast_slope >= TREND_EMA_FAST_SLOPE_MIN and slow_slope >= TREND_EMA_SLOW_SLOPE_MIN
+        rsi_ok = float(last["rsi"]) >= RSI_TREND_MIN
+        vol_ok = MIN_ATR_PCT <= atr_pct <= MAX_ATR_PCT
+        higher_close = float(last["close"]) > float(df.iloc[-4]["close"]) if len(df) >= 4 else True
 
-    @staticmethod
-    def pullback_confirmation(df: pd.DataFrame) -> bool:
+        passed = bullish_stack and slope_ok and rsi_ok and vol_ok and higher_close
+        score = 0.0
+        components: List[Tuple[str, float]] = []
+        if passed:
+            score += 20
+            components.append(("trend_context", 20))
+            if fast_slope >= TREND_EMA_FAST_SLOPE_MIN * 1.6:
+                score += 8
+                components.append(("trend_fast_slope", 8))
+            if slow_slope >= TREND_EMA_SLOW_SLOPE_MIN * 1.4:
+                score += 5
+                components.append(("trend_slow_slope", 5))
+            if float(last["rsi"]) >= RSI_TREND_MIN + 4:
+                score += 4
+                components.append(("trend_rsi_strength", 4))
+            if atr_pct >= max(MIN_ATR_PCT * 1.2, 0.0) and atr_pct <= MAX_ATR_PCT * 0.8:
+                score += 3
+                components.append(("trend_volatility_ok", 3))
+        info = {
+            "fast_slope": round(fast_slope, 6),
+            "slow_slope": round(slow_slope, 6),
+            "atr_pct": round(atr_pct, 6),
+            "rsi": round(float(last["rsi"]), 2),
+        }
+        return passed, score, components, info
+
+    def _pullback_filter(self, df: pd.DataFrame) -> Tuple[bool, float, List[Tuple[str, float]], Dict]:
         last = df.iloc[-1]
-        return bool(last["close"] >= last["ema_fast"] and RSI_PULLBACK_MIN <= last["rsi"] <= RSI_PULLBACK_MAX)
+        window = df.tail(PULLBACK_LOOKBACK)
+        recent_high = float(window["high"].max())
+        recent_low = float(window["low"].min())
+        last_close = float(last["close"])
+        depth_pct = 0.0 if recent_high <= 0 else max(0.0, (recent_high - last_close) / recent_high)
+        real_pullback = int((window["low"] < window["ema_fast"]).sum()) >= 1 or int((window["close"] < window["ema_fast"]).sum()) >= 2
+        trend_intact = recent_low > float(last["ema_slow"]) * 0.995
+        rsi_ok = RSI_PULLBACK_MIN <= float(last["rsi"]) <= RSI_PULLBACK_MAX
+        reclaim_fast = last_close > float(last["ema_fast"])
+        depth_ok = PULLBACK_MIN_DEPTH_PCT <= depth_pct <= PULLBACK_MAX_DEPTH_PCT
+        passed = real_pullback and trend_intact and rsi_ok and reclaim_fast and depth_ok
 
-    @staticmethod
-    def entry_confirmation(df: pd.DataFrame) -> bool:
+        score = 0.0
+        components: List[Tuple[str, float]] = []
+        if passed:
+            score += 15
+            components.append(("pullback_valid", 15))
+            ideal_mid = (PULLBACK_MIN_DEPTH_PCT + PULLBACK_MAX_DEPTH_PCT) / 2
+            if abs(depth_pct - ideal_mid) <= (PULLBACK_MAX_DEPTH_PCT - PULLBACK_MIN_DEPTH_PCT) * 0.2:
+                score += 8
+                components.append(("pullback_depth_ideal", 8))
+            if float(last["rsi"]) <= (RSI_PULLBACK_MIN + RSI_PULLBACK_MAX) / 2:
+                score += 4
+                components.append(("pullback_rsi_cooldown", 4))
+            if int((window["close"] < window["open"]).sum()) >= 2:
+                score += 3
+                components.append(("pullback_bearish_sequence", 3))
+        info = {
+            "depth_pct": round(depth_pct, 6),
+            "recent_high": round(recent_high, 8),
+            "recent_low": round(recent_low, 8),
+            "rsi": round(float(last["rsi"]), 2),
+        }
+        return passed, score, components, info
+
+    def _entry_filter(self, df: pd.DataFrame) -> Tuple[bool, float, List[Tuple[str, float]], Dict]:
         last = df.iloc[-1]
         prev = df.iloc[-2]
-        bullish_reclaim = prev["close"] <= prev["ema_fast"] and last["close"] > last["ema_fast"]
-        return bool(last["ema_fast"] > last["ema_slow"] and last["rsi"] >= RSI_TREND_MIN and bullish_reclaim)
+        prev2 = df.iloc[-3] if len(df) >= 3 else prev
+
+        bullish_reclaim = (
+            float(prev["low"]) <= float(prev["ema_fast"]) and
+            float(last["close"]) > float(last["ema_fast"]) and
+            float(last["close"]) > float(prev["high"])
+        )
+        bullish_body = float(last["close"]) > float(last["open"])
+        body_ratio = self._body_ratio(last)
+        close_position = self._close_position(last)
+        volume_ratio = float(last.get("volume_ratio", 1.0))
+        rsi_reaccel = float(last["rsi"]) > float(prev["rsi"]) >= float(prev2["rsi"])
+        extension_vs_ema = (float(last["close"]) - float(last["ema_fast"])) / max(float(last["close"]), 1e-12)
+        extension_ok = extension_vs_ema <= max(float(last["atr_pct"]) * 1.1, 0.012)
+
+        passed = (
+            bullish_reclaim
+            and bullish_body
+            and body_ratio >= ENTRY_MIN_BODY_RATIO
+            and close_position >= ENTRY_MIN_CLOSE_POSITION
+            and volume_ratio >= ENTRY_MIN_VOLUME_RATIO
+            and rsi_reaccel
+            and extension_ok
+        )
+
+        score = 0.0
+        components: List[Tuple[str, float]] = []
+        if passed:
+            score += 20
+            components.append(("entry_reclaim", 20))
+            if body_ratio >= ENTRY_MIN_BODY_RATIO + 0.12:
+                score += 8
+                components.append(("entry_body_quality", 8))
+            if close_position >= ENTRY_MIN_CLOSE_POSITION + 0.10:
+                score += 6
+                components.append(("entry_close_strength", 6))
+            if volume_ratio >= ENTRY_MIN_VOLUME_RATIO + 0.15:
+                score += 6
+                components.append(("entry_volume_confirm", 6))
+            if float(last["close"]) > float(df.tail(5)["high"].max()) * 0.998:
+                score += 5
+                components.append(("entry_micro_breakout", 5))
+        info = {
+            "body_ratio": round(body_ratio, 6),
+            "close_position": round(close_position, 6),
+            "volume_ratio": round(volume_ratio, 6),
+            "extension_vs_ema": round(extension_vs_ema, 6),
+            "rsi": round(float(last["rsi"]), 2),
+        }
+        return passed, score, components, info
 
     @staticmethod
     def _calc_initial_stop(df_entry: pd.DataFrame, entry_price: float) -> float:
-        recent_low = float(df_entry["low"].tail(RECENT_SWING_LOOKBACK).min())
-        structural_stop = recent_low * 0.999
+        recent = df_entry.tail(RECENT_SWING_LOOKBACK)
+        recent_low = float(recent["low"].min())
+        atr = float(df_entry.iloc[-1].get("atr", 0.0) or 0.0)
+        structural_stop = recent_low - (atr * 0.25)
         fallback_stop = entry_price * (1 - STOP_LOSS_PORC)
         if structural_stop <= 0 or structural_stop >= entry_price:
             candidate_stop = fallback_stop
         else:
-            candidate_stop = structural_stop
+            candidate_stop = min(structural_stop, fallback_stop)
         return round(candidate_stop, 8)
 
     @staticmethod
@@ -93,51 +260,60 @@ class MTFStrategy:
         df_pullback: pd.DataFrame,
         df_entry: pd.DataFrame,
     ) -> Optional[Dict]:
-        if min(len(df_trend), len(df_pullback), len(df_entry)) < max(EMA_SLOW + 5, RSI_PERIOD + 5):
+        if min(len(df_trend), len(df_pullback), len(df_entry)) < max(EMA_SLOW + 8, ATR_PERIOD + 8, RSI_PERIOD + 8):
             return None
 
         df_trend = self.add_indicators(df_trend)
         df_pullback = self.add_indicators(df_pullback)
         df_entry = self.add_indicators(df_entry)
+        if min(len(df_trend), len(df_pullback), len(df_entry)) < 10:
+            return None
 
         score = 0.0
-        components = []
+        components: List[Tuple[str, float]] = []
 
-        if not self.is_trend_bullish(df_trend):
+        trend_ok, trend_score, trend_components, trend_info = self._trend_filter(df_trend)
+        if not trend_ok:
             return None
-        score += 35
-        components.append(("trend", 35))
+        score += trend_score
+        components.extend(trend_components)
 
-        if not self.pullback_confirmation(df_pullback):
+        pullback_ok, pullback_score, pullback_components, pullback_info = self._pullback_filter(df_pullback)
+        if not pullback_ok:
             return None
-        score += 25
-        components.append(("pullback", 25))
+        score += pullback_score
+        components.extend(pullback_components)
 
-        if not self.entry_confirmation(df_entry):
+        entry_ok, entry_score, entry_components, entry_info = self._entry_filter(df_entry)
+        if not entry_ok:
             return None
-        score += 25
-        components.append(("entry_confirm", 25))
+        score += entry_score
+        components.extend(entry_components)
 
         last = df_entry.iloc[-1]
-        prev = df_entry.iloc[-2]
+        entry_price = round(float(last["close"]), 8)
+        initial_stop_loss = self._calc_initial_stop(df_entry, entry_price)
+        risk_per_unit = round(entry_price - initial_stop_loss, 8)
+        if risk_per_unit <= 0:
+            return None
 
-        if last["close"] > prev["high"]:
-            score += 10
-            components.append(("break_prev_high", 10))
+        stop_distance_pct = risk_per_unit / max(entry_price, 1e-12)
+        if stop_distance_pct > MAX_STOP_DISTANCE_PCT:
+            return None
 
-        if last["volume"] > df_entry["volume"].tail(20).mean():
+        dynamic_tp_activation_price = self._calc_dynamic_activation(entry_price, initial_stop_loss)
+        if dynamic_tp_activation_price <= entry_price:
+            return None
+
+        if stop_distance_pct <= MAX_STOP_DISTANCE_PCT * 0.55:
             score += 5
-            components.append(("volume_bonus", 5))
+            components.append(("risk_distance_compact", 5))
+        if float(last["atr_pct"]) >= MIN_ATR_PCT * 1.4:
+            score += 3
+            components.append(("entry_volatility_supported", 3))
 
         score = min(MAX_SCORE, round(score, 2))
         if score < MIN_SIGNAL_SCORE:
-            return None
-
-        entry_price = round(float(last["close"]), 8)
-        initial_stop_loss = self._calc_initial_stop(df_entry, entry_price)
-        dynamic_tp_activation_price = self._calc_dynamic_activation(entry_price, initial_stop_loss)
-        risk_per_unit = round(entry_price - initial_stop_loss, 8)
-        if risk_per_unit <= 0:
             return None
 
         return {
@@ -149,19 +325,25 @@ class MTFStrategy:
             "score": score,
             "components": components,
             "entry_candle_ts": int(last["date_ms"]),
+            "strategy_meta": {
+                "trend": trend_info,
+                "pullback": pullback_info,
+                "entry": entry_info,
+                "stop_distance_pct": round(stop_distance_pct, 6),
+                "atr_pct": round(float(last["atr_pct"]), 6),
+            },
             "manager_rules": {
                 "weakness_confirmations_required": WEAKNESS_CONFIRMATIONS_REQUIRED,
                 "weakness_min_score": WEAKNESS_MIN_SCORE,
                 "recent_swing_lookback": RECENT_SWING_LOOKBACK,
                 "tp_activation_r": DYNAMIC_TP_ACTIVATION_R,
+                "break_even_offset_r": BREAK_EVEN_OFFSET_R,
+                "trail_stop_atr_multiplier": TRAIL_STOP_ATR_MULTIPLIER,
+                "weakness_rsi_delta": WEAKNESS_RSI_DELTA,
             },
         }
 
     def process_manager_candle(self, state: Dict, row: pd.Series, previous_row: Optional[pd.Series] = None) -> Dict:
-        """Aplica una vela cerrada al manager persistente.
-
-        Devuelve updates de estado y, si corresponde, una señal de salida.
-        """
         updates: Dict = {}
         events = []
         exit_signal = None
@@ -202,6 +384,7 @@ class MTFStrategy:
             events.append({"type": "STOP_LOSS_TRIGGERED", "payload": exit_signal})
             return {"updates": updates, "events": events, "exit_signal": exit_signal}
 
+        manager_rules = state.get("strategy", {}).get("manager_rules") or state.get("manager_rules") or {}
         dynamic_active = bool(state.get("dynamic_tp_active"))
         activation_price = float(state.get("dynamic_tp_activation_price") or 0.0)
         if not dynamic_active and high >= activation_price > 0:
@@ -209,15 +392,31 @@ class MTFStrategy:
             updates["dynamic_tp_active"] = True
             updates["dynamic_tp_activated_at"] = candle_iso
             updates["weakness_confirmations"] = 0
-            events.append(
-                {
-                    "type": "DYNAMIC_TP_ACTIVATED",
-                    "payload": {"activation_price": round(activation_price, 8), "at": candle_iso},
-                }
-            )
+            events.append({
+                "type": "DYNAMIC_TP_ACTIVATED",
+                "payload": {"activation_price": round(activation_price, 8), "at": candle_iso},
+            })
+
+        if dynamic_active:
+            break_even_offset_r = float(manager_rules.get("break_even_offset_r", BREAK_EVEN_OFFSET_R))
+            trail_atr_mult = float(manager_rules.get("trail_stop_atr_multiplier", TRAIL_STOP_ATR_MULTIPLIER))
+            atr = float(row.get("atr", 0.0) or 0.0)
+            break_even_stop = entry_price + (risk_per_unit * break_even_offset_r)
+            ema_trail = float(row.get("ema_fast", close)) - (atr * trail_atr_mult)
+            prev_low_anchor = float(previous_row["low"]) if previous_row is not None else close
+            structure_trail = prev_low_anchor - (atr * 0.25)
+            trail_candidate = max(effective_stop, break_even_stop, ema_trail, structure_trail)
+            trail_candidate = min(trail_candidate, close)
+            if trail_candidate > effective_stop:
+                updates["effective_stop_loss"] = round(trail_candidate, 8)
+                effective_stop = float(updates["effective_stop_loss"])
+                events.append({
+                    "type": "TRAIL_STOP_RAISED",
+                    "payload": {"new_stop": round(trail_candidate, 8), "at": candle_iso},
+                })
 
         weakness_score = 0
-        weakness_reasons = []
+        weakness_reasons: List[str] = []
         if dynamic_active and previous_row is not None:
             if close < float(row.get("ema_fast", close)):
                 weakness_score += 1
@@ -225,33 +424,37 @@ class MTFStrategy:
             if close < float(previous_row["close"]):
                 weakness_score += 1
                 weakness_reasons.append("lower_close")
+            if close < float(previous_row["low"]):
+                weakness_score += 1
+                weakness_reasons.append("close_below_prev_low")
             if high <= float(previous_row["high"]) and low <= float(previous_row["low"]):
                 weakness_score += 1
                 weakness_reasons.append("lower_high_low")
-            if float(row.get("rsi", 50.0)) < max(RSI_TREND_MIN - 2, float(previous_row.get("rsi", 50.0)) - 1.5):
+            if self._close_position(row) < 0.45:
                 weakness_score += 1
-                weakness_reasons.append("rsi_weakness")
-            if float(row.get("volume", 0.0)) < float(row.get("volume_sma", row.get("volume", 0.0))):
+                weakness_reasons.append("weak_close_position")
+            prev_rsi = float(previous_row.get("rsi", 50.0))
+            current_rsi = float(row.get("rsi", 50.0))
+            weakness_rsi_delta = float(manager_rules.get("weakness_rsi_delta", WEAKNESS_RSI_DELTA))
+            if current_rsi <= prev_rsi - weakness_rsi_delta:
                 weakness_score += 1
-                weakness_reasons.append("volume_below_mean")
+                weakness_reasons.append("rsi_rollover")
+            if float(row.get("volume_ratio", 1.0)) < 0.9:
+                weakness_score += 1
+                weakness_reasons.append("volume_fade")
 
         updates["weakness_last_score"] = weakness_score
         updates["weakness_last_reason"] = weakness_reasons
 
         current_confirmations = int(state.get("weakness_confirmations") or 0)
         if dynamic_active:
-            if weakness_score >= int(state.get("manager_rules", {}).get("weakness_min_score", WEAKNESS_MIN_SCORE)):
+            if weakness_score >= int(manager_rules.get("weakness_min_score", WEAKNESS_MIN_SCORE)):
                 current_confirmations += 1
             else:
                 current_confirmations = 0
             updates["weakness_confirmations"] = current_confirmations
 
-            required = int(
-                state.get("manager_rules", {}).get(
-                    "weakness_confirmations_required",
-                    WEAKNESS_CONFIRMATIONS_REQUIRED,
-                )
-            )
+            required = int(manager_rules.get("weakness_confirmations_required", WEAKNESS_CONFIRMATIONS_REQUIRED))
             if current_confirmations >= required:
                 exit_signal = {
                     "reason": "WEAKNESS_EXIT",
@@ -304,6 +507,9 @@ class MTFStrategy:
                 updates["dynamic_tp_active"] = True
                 updates["dynamic_tp_activated_at"] = pd.Timestamp.utcnow().isoformat()
                 updates["weakness_confirmations"] = 0
+                break_even_offset_r = float((state.get("strategy", {}).get("manager_rules") or {}).get("break_even_offset_r", BREAK_EVEN_OFFSET_R))
+                break_even_stop = entry_price + (risk_per_unit * break_even_offset_r)
+                updates["effective_stop_loss"] = round(max(effective_stop, break_even_stop), 8)
                 events.append({"type": "DYNAMIC_TP_ACTIVATED_LIVE", "payload": {"activation_price": round(activation_price, 8)}})
 
         return {"updates": updates, "events": events, "exit_signal": exit_signal}
