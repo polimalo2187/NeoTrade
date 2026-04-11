@@ -5,7 +5,7 @@ from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandle
 
 from app.admin_panel import AdminPanel
 from app.botones import BOTONES_CONFIGURACION, BOTONES_PRINCIPAL
-from app.config import ADMIN_TELEGRAM_IDS, QUOTE_ASSET, TELEGRAM_BOT_TOKEN
+from app.config import ADMIN_TELEGRAM_IDS, CAPITAL_ACTIVO_PORC, QUOTE_ASSET, TELEGRAM_BOT_TOKEN
 from app.exchange import CoinWApiError, ExchangeClient
 from app.fee_manager import FeeManager
 from app.mensajes import mensaje_capital, mensaje_configuracion, mensaje_fee, mensaje_historial, mensaje_referidos
@@ -168,13 +168,20 @@ class Bot:
             balance_line = ""
             try:
                 client = ExchangeClient(usuario.get("api_key"), usuario.get("api_secret"))
-                available_quote = float(client.obtener_balance_disponible(QUOTE_ASSET))
-                UsuarioModel.actualizar_capital_snapshot(telegram_id, available_quote, available_quote)
-                balance_line = f"\nCapital disponible detectado: {_format_decimal(available_quote)} {QUOTE_ASSET}"
+                capital = client.estimar_capital_total_en_quote(QUOTE_ASSET)
+                capital_total = float(capital["capital_total_estimated"])
+                available_quote = float(capital["quote_available"])
+                capital_activo = capital_total * CAPITAL_ACTIVO_PORC
+                UsuarioModel.actualizar_capital_snapshot(telegram_id, capital_total, capital_activo)
+                balance_line = (
+                    f"\nCapital estimado detectado: {_format_decimal(capital_total)} {QUOTE_ASSET}"
+                    f"\nDisponible en {QUOTE_ASSET}: {_format_decimal(available_quote)} {QUOTE_ASSET}"
+                )
                 logger.info(
-                    "USUARIO_ACTIVADO | telegram_id=%s | quote_asset=%s | capital_disponible=%s | fee_due_total=%s | trading_pause_reason=%s",
+                    "USUARIO_ACTIVADO | telegram_id=%s | quote_asset=%s | capital_estimado=%s | quote_disponible=%s | fee_due_total=%s | trading_pause_reason=%s",
                     telegram_id,
                     QUOTE_ASSET,
+                    _format_decimal(capital_total),
                     _format_decimal(available_quote),
                     _format_decimal(float(usuario.get("fee_due_total") or 0.0)),
                     usuario.get("trading_pause_reason") or "none",
@@ -204,6 +211,16 @@ class Bot:
 
         if query.data == "💰 Capital":
             usuario = UsuarioModel.obtener_usuario({"telegram_id": telegram_id})
+            if usuario.get("api_key") and usuario.get("api_secret"):
+                try:
+                    client = ExchangeClient(usuario.get("api_key"), usuario.get("api_secret"))
+                    capital = client.estimar_capital_total_en_quote(QUOTE_ASSET)
+                    capital_total = float(capital["capital_total_estimated"])
+                    capital_activo = capital_total * CAPITAL_ACTIVO_PORC
+                    UsuarioModel.actualizar_capital_snapshot(telegram_id, capital_total, capital_activo)
+                    usuario = UsuarioModel.obtener_usuario({"telegram_id": telegram_id}) or usuario
+                except Exception as exc:
+                    logger.warning("No se pudo refrescar el capital en vivo del usuario %s: %s", telegram_id, exc)
             await query.edit_message_text(mensaje_capital(usuario), reply_markup=self._navigation_keyboard("NAV_MAIN"))
             return
 
