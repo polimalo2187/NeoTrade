@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 import time
 import urllib.parse
@@ -156,8 +157,32 @@ class ExchangeClient:
         candidates = {asset, asset.upper(), asset.lower()}
         return [candidate for candidate in candidates if candidate]
 
+    @staticmethod
+    def _looks_like_asset_key(value: Any) -> bool:
+        text = str(value or "").strip()
+        return bool(text) and len(text) <= 15 and text.replace("_", "").replace("-", "").isalnum()
+
+    @staticmethod
+    def _balance_preview(payload: Any, limit: int = 600) -> str:
+        try:
+            raw = json.dumps(payload, ensure_ascii=False, default=str)
+        except Exception:
+            raw = str(payload)
+        return raw[:limit]
+
     def _normalize_balances_payload(self, payload_data: Any) -> Dict[str, Dict[str, Decimal]]:
         normalized: Dict[str, Dict[str, Decimal]] = {}
+
+        def merge_balance(asset_name: Any, available: Decimal, locked: Decimal, total: Decimal) -> None:
+            asset = str(asset_name or "").strip().upper()
+            if not asset:
+                return
+            current = normalized.get(asset, {"available": Decimal("0"), "locked": Decimal("0"), "total": Decimal("0")})
+            new_available = available if available > current["available"] else current["available"]
+            new_locked = locked if locked > current["locked"] else current["locked"]
+            computed_total = total if total > 0 else new_available + new_locked
+            new_total = computed_total if computed_total > current["total"] else current["total"]
+            normalized[asset] = {"available": new_available, "locked": new_locked, "total": new_total}
 
         def store(asset_name: Any, item: Any) -> None:
             asset = str(asset_name or "").strip().upper()
@@ -165,44 +190,75 @@ class ExchangeClient:
                 return
             if isinstance(item, dict):
                 available = self._to_decimal(
-                    item.get("available", item.get("free", item.get("normal", item.get("balance", item.get("total", 0)))))
+                    item.get("available", item.get("free", item.get("normal", item.get("balance", item.get("usable", item.get("total", 0))))))
                 )
                 locked = self._to_decimal(
-                    item.get("onOrders", item.get("frozen", item.get("locked", item.get("hold", 0))))
+                    item.get("onOrders", item.get("frozen", item.get("locked", item.get("hold", item.get("freeze", 0)))))
                 )
-                total = self._to_decimal(item.get("total", available + locked))
+                total = self._to_decimal(item.get("total", item.get("amount", available + locked)))
             else:
                 available = self._to_decimal(item)
                 locked = Decimal("0")
                 total = available
-            normalized[asset] = {
-                "available": available,
-                "locked": locked,
-                "total": total if total > 0 else available + locked,
-            }
+            merge_balance(asset, available, locked, total)
 
-        if isinstance(payload_data, dict):
-            for key, value in payload_data.items():
-                store(key, value)
-            return normalized
+        def walk(node: Any) -> None:
+            if node is None:
+                return
+            if isinstance(node, str):
+                try:
+                    parsed = json.loads(node)
+                except Exception:
+                    return
+                walk(parsed)
+                return
+            if isinstance(node, list):
+                for row in node:
+                    walk(row)
+                return
+            if not isinstance(node, dict):
+                return
 
-        if isinstance(payload_data, list):
-            for row in payload_data:
-                if not isinstance(row, dict):
-                    continue
-                asset_name = (
-                    row.get("asset")
-                    or row.get("currency")
-                    or row.get("coin")
-                    or row.get("symbol")
-                    or row.get("name")
-                )
-                if not asset_name:
-                    continue
-                store(asset_name, row)
-            return normalized
+            # Common nested containers
+            for nested_key in ("data", "balances", "assets", "items", "rows", "list", "result"):
+                nested_value = node.get(nested_key)
+                if nested_value is not None and nested_value is not node:
+                    walk(nested_value)
 
+            asset_name = (
+                node.get("asset")
+                or node.get("currency")
+                or node.get("coin")
+                or node.get("symbol")
+                or node.get("currencyName")
+                or node.get("coinName")
+                or node.get("name")
+            )
+            if asset_name:
+                store(asset_name, node)
+                return
+
+            # Direct map of asset -> balance dict/value
+            direct_asset_entries = []
+            for key, value in node.items():
+                if self._looks_like_asset_key(key) and (isinstance(value, (dict, str, int, float))):
+                    direct_asset_entries.append((key, value))
+            if direct_asset_entries:
+                for key, value in direct_asset_entries:
+                    store(key, value)
+
+        walk(payload_data)
         return normalized
+
+    @staticmethod
+    def _balances_have_positive_amount(balances: Dict[str, Dict[str, Decimal]]) -> bool:
+        for item in balances.values():
+            total = item.get("total", Decimal("0"))
+            if total <= 0:
+                total = item.get("available", Decimal("0")) + item.get("locked", Decimal("0"))
+            if total > 0:
+                return True
+        return False
 
     def _find_balance_entry(self, balances: Dict[str, Dict[str, Decimal]], asset: str) -> Dict[str, Decimal]:
         for candidate in self._asset_candidates(asset):
@@ -218,18 +274,52 @@ class ExchangeClient:
         return float(item.get("available", Decimal("0")) or 0)
 
     def obtener_balances_completos(self) -> Dict[str, Dict[str, Decimal]]:
+        balances_complete: Dict[str, Dict[str, Decimal]] = {}
+        balances_available: Dict[str, Dict[str, Decimal]] = {}
+        payload_complete: Any = None
+        payload_available: Any = None
+
         try:
-            payload = self._private_request("returnCompleteBalances", {})
-            balances = self._normalize_balances_payload(payload.get("data", {}))
-            if balances:
-                return balances
+            payload_complete = self._private_request("returnCompleteBalances", {})
+            balances_complete = self._normalize_balances_payload(payload_complete.get("data", payload_complete))
         except CoinWApiError:
             raise
         except Exception:
             logger.exception("No se pudieron normalizar balances completos de CoinW")
 
-        payload = self._private_request("returnBalances", {})
-        return self._normalize_balances_payload(payload.get("data", {}))
+        try:
+            payload_available = self._private_request("returnBalances", {})
+            balances_available = self._normalize_balances_payload(payload_available.get("data", payload_available))
+        except CoinWApiError:
+            raise
+        except Exception:
+            logger.exception("No se pudieron normalizar balances disponibles de CoinW")
+
+        merged: Dict[str, Dict[str, Decimal]] = {}
+        for source in (balances_complete, balances_available):
+            for asset, item in source.items():
+                current = merged.get(asset, {"available": Decimal("0"), "locked": Decimal("0"), "total": Decimal("0")})
+                available = item.get("available", Decimal("0"))
+                locked = item.get("locked", Decimal("0"))
+                total = item.get("total", Decimal("0"))
+                merged[asset] = {
+                    "available": available if available > current["available"] else current["available"],
+                    "locked": locked if locked > current["locked"] else current["locked"],
+                    "total": total if total > current["total"] else current["total"],
+                }
+
+        for asset, item in merged.items():
+            if item["total"] <= 0:
+                item["total"] = item["available"] + item["locked"]
+
+        if not self._balances_have_positive_amount(merged):
+            logger.warning(
+                "COINW_BALANCES_ZERO | complete=%s | available=%s",
+                self._balance_preview(payload_complete),
+                self._balance_preview(payload_available),
+            )
+
+        return merged
 
     def obtener_balance_disponible(self, asset: str = QUOTE_ASSET) -> Decimal:
         balances = self.obtener_balances_completos()
