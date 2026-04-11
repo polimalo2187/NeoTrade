@@ -10,7 +10,7 @@ def mensaje_capital(usuario: Dict) -> str:
 
     lines = [
         f"💰 Capital estimado: {capital_total:.4f} {PAYMENT_ASSET}",
-        f"📊 Capital operativo configurado: {capital_activo:.4f} {PAYMENT_ASSET}",
+        f"📊 Capital utilizable por el bot: {capital_activo:.4f} {PAYMENT_ASSET}",
         f"🤖 Bot activo: {'Sí' if usuario.get('bot_activo') else 'No'}",
         f"🔐 Trading habilitado: {'Sí' if usuario.get('trading_enabled', True) else 'No'}",
         f"💸 Fee pendiente: {float(usuario.get('fee_due_total', 0) or 0):.2f} {PAYMENT_ASSET}",
