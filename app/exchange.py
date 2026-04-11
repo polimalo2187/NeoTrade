@@ -25,6 +25,9 @@ class CoinWApiError(Exception):
         self.status_code = status_code
 
 
+class CoinWEmptySpotBalanceError(CoinWApiError):
+    def __init__(self, message: str, payload: Optional[Dict[str, Any]] = None):
+        super().__init__(message=message, payload=payload or {})
 
 
 @dataclass
@@ -184,18 +187,32 @@ class ExchangeClient:
             new_total = computed_total if computed_total > current["total"] else current["total"]
             normalized[asset] = {"available": new_available, "locked": new_locked, "total": new_total}
 
+        def _max_decimal_from_keys(item: Dict[str, Any], keys: Iterable[str]) -> Decimal:
+            values = [self._to_decimal(item.get(key)) for key in keys if key in item]
+            positives = [value for value in values if value > 0]
+            if positives:
+                return max(positives)
+            return max(values) if values else Decimal("0")
+
         def store(asset_name: Any, item: Any) -> None:
             asset = str(asset_name or "").strip().upper()
             if not asset:
                 return
             if isinstance(item, dict):
-                available = self._to_decimal(
-                    item.get("available", item.get("free", item.get("normal", item.get("balance", item.get("usable", item.get("total", 0))))))
+                available = _max_decimal_from_keys(
+                    item,
+                    ("available", "free", "normal", "balance", "usable", "canUseAmount", "remainAmount", "remain", "cash", "total"),
                 )
-                locked = self._to_decimal(
-                    item.get("onOrders", item.get("frozen", item.get("locked", item.get("hold", item.get("freeze", 0)))))
+                locked = _max_decimal_from_keys(
+                    item,
+                    ("onOrders", "frozen", "locked", "hold", "freeze", "lock", "occupied", "withdrawing"),
                 )
-                total = self._to_decimal(item.get("total", item.get("amount", available + locked)))
+                total = _max_decimal_from_keys(
+                    item,
+                    ("total", "amount", "balance", "normal", "available", "usable", "free", "canUseAmount"),
+                )
+                if total <= 0:
+                    total = available + locked
             else:
                 available = self._to_decimal(item)
                 locked = Decimal("0")
@@ -220,7 +237,7 @@ class ExchangeClient:
                 return
 
             # Common nested containers
-            for nested_key in ("data", "balances", "assets", "items", "rows", "list", "result"):
+            for nested_key in ("data", "balances", "assets", "items", "rows", "list", "result", "wallet", "account", "accounts", "details"):
                 nested_value = node.get(nested_key)
                 if nested_value is not None and nested_value is not node:
                     walk(nested_value)
@@ -236,7 +253,6 @@ class ExchangeClient:
             )
             if asset_name:
                 store(asset_name, node)
-                return
 
             # Direct map of asset -> balance dict/value
             direct_asset_entries = []
@@ -246,6 +262,11 @@ class ExchangeClient:
             if direct_asset_entries:
                 for key, value in direct_asset_entries:
                     store(key, value)
+
+            # Fallback deep walk through arbitrary nested dict values
+            for value in node.values():
+                if isinstance(value, (dict, list, str)):
+                    walk(value)
 
         walk(payload_data)
         return normalized
@@ -313,11 +334,24 @@ class ExchangeClient:
                 item["total"] = item["available"] + item["locked"]
 
         if not self._balances_have_positive_amount(merged):
+            diagnostic_payload = {
+                "complete": payload_complete,
+                "available": payload_available,
+            }
             logger.warning(
                 "COINW_BALANCES_ZERO | complete=%s | available=%s",
                 self._balance_preview(payload_complete),
                 self._balance_preview(payload_available),
             )
+            raise CoinWEmptySpotBalanceError(
+                "CoinW devolvió los balances Spot vacíos para esta API.",
+                payload=diagnostic_payload,
+            )
+
+        logger.info(
+            "COINW_BALANCES_NORMALIZED | balances=%s",
+            {asset: {k: str(v) for k, v in item.items()} for asset, item in list(merged.items())[:10]},
+        )
 
         return merged
 
