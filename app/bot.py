@@ -6,7 +6,7 @@ from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandle
 from app.admin_panel import AdminPanel
 from app.botones import BOTONES_CONFIGURACION, BOTONES_PRINCIPAL
 from app.config import ADMIN_TELEGRAM_IDS, CAPITAL_ACTIVO_PORC, QUOTE_ASSET, TELEGRAM_BOT_TOKEN
-from app.exchange import CoinWApiError, ExchangeClient
+from app.exchange import CoinWApiError, CoinWEmptySpotBalanceError, ExchangeClient
 from app.fee_manager import FeeManager
 from app.mensajes import mensaje_capital, mensaje_configuracion, mensaje_fee, mensaje_historial, mensaje_referidos
 from app.models import OperacionModel, UsuarioModel
@@ -186,6 +186,22 @@ class Bot:
                     _format_decimal(float(usuario.get("fee_due_total") or 0.0)),
                     usuario.get("trading_pause_reason") or "none",
                 )
+            except CoinWEmptySpotBalanceError as exc:
+                logger.warning(
+                    "USUARIO_ACTIVACION_BALANCE_SPOT_VACIO | telegram_id=%s | motivo=%s",
+                    telegram_id,
+                    exc,
+                )
+                await query.edit_message_text(
+                    "No pude activar el bot porque CoinW devolvió la cuenta Spot vacía para esa API.\n\n"
+                    "Revisa en CoinW estas 3 cosas:\n"
+                    "1) que el dinero esté en Spot Trading y no en Buy Crypto/Funding,\n"
+                    "2) que esa API pertenezca a la misma cuenta donde ves el saldo,\n"
+                    "3) que la API tenga acceso Spot.\n\n"
+                    f"Detalles del bot: capital estimado detectado = 0 {QUOTE_ASSET}.",
+                    reply_markup=self._navigation_keyboard("NAV_MAIN"),
+                )
+                return
             except CoinWApiError as exc:
                 logger.warning(
                     "USUARIO_ACTIVADO_SIN_SNAPSHOT | telegram_id=%s | motivo=%s",
@@ -219,6 +235,15 @@ class Bot:
                     capital_activo = capital_total * CAPITAL_ACTIVO_PORC
                     UsuarioModel.actualizar_capital_snapshot(telegram_id, capital_total, capital_activo)
                     usuario = UsuarioModel.obtener_usuario({"telegram_id": telegram_id}) or usuario
+                except CoinWEmptySpotBalanceError as exc:
+                    logger.warning("CAPITAL_SPOT_VACIO | telegram_id=%s | motivo=%s", telegram_id, exc)
+                    await query.edit_message_text(
+                        "CoinW devolvió los balances Spot vacíos para esa API.\n\n"
+                        "Eso significa que el bot no está viendo fondos en la cuenta Spot consultada por la API.\n"
+                        "Revisa en CoinW que el dinero esté en Spot Trading y que la API pertenezca a esa misma cuenta.",
+                        reply_markup=self._navigation_keyboard("NAV_MAIN"),
+                    )
+                    return
                 except Exception as exc:
                     logger.warning("No se pudo refrescar el capital en vivo del usuario %s: %s", telegram_id, exc)
             await query.edit_message_text(mensaje_capital(usuario), reply_markup=self._navigation_keyboard("NAV_MAIN"))
