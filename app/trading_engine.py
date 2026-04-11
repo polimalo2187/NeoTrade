@@ -148,19 +148,10 @@ class TradingEngine:
                 UsuarioModel.actualizar_engine_error(telegram_id, str(exc))
 
     def _refresh_user_capital_snapshot(self, usuario: Dict, client: ExchangeClient) -> None:
-        quote_balance = client.obtener_balance_disponible(QUOTE_ASSET)
-        capital_total = quote_balance
-        active_position = usuario.get("active_position")
-        if active_position:
-            try:
-                base_asset = active_position.get("base_asset")
-                base_balance = client.obtener_balance_disponible(base_asset)
-                last_price = Decimal(str(client.obtener_precio_actual(active_position["symbol"])))
-                capital_total += base_balance * last_price
-            except Exception:
-                logger.debug("No se pudo valuar la posición activa del usuario %s", usuario["telegram_id"])
-        capital_activo = float(capital_total) * CAPITAL_ACTIVO_PORC
-        UsuarioModel.actualizar_capital_snapshot(usuario["telegram_id"], float(capital_total), capital_activo)
+        capital = client.estimar_capital_total_en_quote(QUOTE_ASSET)
+        capital_total = float(capital["capital_total_estimated"])
+        capital_activo = capital_total * CAPITAL_ACTIVO_PORC
+        UsuarioModel.actualizar_capital_snapshot(usuario["telegram_id"], capital_total, capital_activo)
 
     def _get_candidate_symbols(self) -> List[str]:
         now = time.time()
