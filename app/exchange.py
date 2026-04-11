@@ -6,7 +6,7 @@ import uuid
 from json import JSONDecodeError
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_DOWN, InvalidOperation
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import pandas as pd
 import requests
@@ -138,17 +138,145 @@ class ExchangeClient:
     def validar_credenciales(self) -> Dict[str, Any]:
         return self._private_request("returnBalances", {})
 
-    def obtener_balance(self, asset: str = QUOTE_ASSET) -> float:
-        balances = self._private_request("returnBalances", {}).get("data", {})
-        return float(balances.get(asset.upper(), 0) or 0)
 
-    def obtener_balances_completos(self) -> Dict[str, Dict[str, str]]:
-        return self._private_request("returnCompleteBalances", {}).get("data", {})
+    @staticmethod
+    def _to_decimal(value: Any) -> Decimal:
+        try:
+            if value is None or value == "":
+                return Decimal("0")
+            return Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            return Decimal("0")
+
+    @staticmethod
+    def _asset_candidates(asset: str) -> Iterable[str]:
+        asset = str(asset or "").strip()
+        if not asset:
+            return []
+        candidates = {asset, asset.upper(), asset.lower()}
+        return [candidate for candidate in candidates if candidate]
+
+    def _normalize_balances_payload(self, payload_data: Any) -> Dict[str, Dict[str, Decimal]]:
+        normalized: Dict[str, Dict[str, Decimal]] = {}
+
+        def store(asset_name: Any, item: Any) -> None:
+            asset = str(asset_name or "").strip().upper()
+            if not asset:
+                return
+            if isinstance(item, dict):
+                available = self._to_decimal(
+                    item.get("available", item.get("free", item.get("normal", item.get("balance", item.get("total", 0)))))
+                )
+                locked = self._to_decimal(
+                    item.get("onOrders", item.get("frozen", item.get("locked", item.get("hold", 0))))
+                )
+                total = self._to_decimal(item.get("total", available + locked))
+            else:
+                available = self._to_decimal(item)
+                locked = Decimal("0")
+                total = available
+            normalized[asset] = {
+                "available": available,
+                "locked": locked,
+                "total": total if total > 0 else available + locked,
+            }
+
+        if isinstance(payload_data, dict):
+            for key, value in payload_data.items():
+                store(key, value)
+            return normalized
+
+        if isinstance(payload_data, list):
+            for row in payload_data:
+                if not isinstance(row, dict):
+                    continue
+                asset_name = (
+                    row.get("asset")
+                    or row.get("currency")
+                    or row.get("coin")
+                    or row.get("symbol")
+                    or row.get("name")
+                )
+                if not asset_name:
+                    continue
+                store(asset_name, row)
+            return normalized
+
+        return normalized
+
+    def _find_balance_entry(self, balances: Dict[str, Dict[str, Decimal]], asset: str) -> Dict[str, Decimal]:
+        for candidate in self._asset_candidates(asset):
+            item = balances.get(candidate.upper()) or balances.get(candidate)
+            if item is not None:
+                return item
+        return {"available": Decimal("0"), "locked": Decimal("0"), "total": Decimal("0")}
+
+    def obtener_balance(self, asset: str = QUOTE_ASSET) -> float:
+        payload = self._private_request("returnBalances", {})
+        balances = self._normalize_balances_payload(payload.get("data", {}))
+        item = self._find_balance_entry(balances, asset)
+        return float(item.get("available", Decimal("0")) or 0)
+
+    def obtener_balances_completos(self) -> Dict[str, Dict[str, Decimal]]:
+        try:
+            payload = self._private_request("returnCompleteBalances", {})
+            balances = self._normalize_balances_payload(payload.get("data", {}))
+            if balances:
+                return balances
+        except CoinWApiError:
+            raise
+        except Exception:
+            logger.exception("No se pudieron normalizar balances completos de CoinW")
+
+        payload = self._private_request("returnBalances", {})
+        return self._normalize_balances_payload(payload.get("data", {}))
 
     def obtener_balance_disponible(self, asset: str = QUOTE_ASSET) -> Decimal:
         balances = self.obtener_balances_completos()
-        item = balances.get(asset.upper()) or {}
-        return Decimal(str(item.get("available", 0) or 0))
+        item = self._find_balance_entry(balances, asset)
+        return item.get("available", Decimal("0"))
+
+    def obtener_balance_total(self, asset: str = QUOTE_ASSET) -> Decimal:
+        balances = self.obtener_balances_completos()
+        item = self._find_balance_entry(balances, asset)
+        total = item.get("total", Decimal("0"))
+        if total <= 0:
+            total = item.get("available", Decimal("0")) + item.get("locked", Decimal("0"))
+        return total
+
+    def estimar_capital_total_en_quote(self, quote_asset: str = QUOTE_ASSET) -> Dict[str, Decimal]:
+        balances = self.obtener_balances_completos()
+        quote_total = self.obtener_balance_total(quote_asset)
+        quote_available = self.obtener_balance_disponible(quote_asset)
+        total_estimated = quote_total
+
+        try:
+            ticker = self.obtener_ticker_24h()
+        except Exception:
+            ticker = {}
+
+        for asset, item in balances.items():
+            if asset.upper() == quote_asset.upper():
+                continue
+            asset_total = item.get("total", Decimal("0"))
+            if asset_total <= 0:
+                asset_total = item.get("available", Decimal("0")) + item.get("locked", Decimal("0"))
+            if asset_total <= 0:
+                continue
+            symbol = f"{asset.upper()}_{quote_asset.upper()}"
+            ticker_item = ticker.get(symbol) if isinstance(ticker, dict) else None
+            if not ticker_item:
+                continue
+            last_price = self._to_decimal(ticker_item.get("last", 0))
+            if last_price <= 0:
+                continue
+            total_estimated += asset_total * last_price
+
+        return {
+            "quote_available": quote_available,
+            "quote_total": quote_total,
+            "capital_total_estimated": total_estimated,
+        }
 
     def obtener_ticker_24h(self) -> Dict[str, Dict[str, Any]]:
         return self._public_request("returnTicker", {}).get("data", {})
