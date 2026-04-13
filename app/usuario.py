@@ -1,8 +1,8 @@
 import uuid
-from typing import Optional, Tuple
+from typing import Tuple
 
-from app.config import CAPITAL_ACTIVO_PORC
-from app.exchange import CoinWApiError, ExchangeClient
+from app.config import CAPITAL_ACTIVO_PORC, QUOTE_ASSET
+from app.exchange import CoinWApiError, CoinWEmptySpotBalanceError, ExchangeClient
 
 
 class Usuario:
@@ -52,8 +52,26 @@ class Usuario:
     def validar_api(api_key: str, api_secret: str, return_error: bool = False) -> Tuple[bool, str]:
         try:
             client = ExchangeClient(api_key=api_key, api_secret=api_secret)
-            client.validar_credenciales()
-            return (True, "") if return_error else True
+            diagnostico = client.validar_acceso_spot(QUOTE_ASSET)
+            disponible = float(diagnostico.get("quote_available") or 0)
+            total = float(diagnostico.get("quote_total") or 0)
+            if total <= 0:
+                mensaje = (
+                    f"La API autenticó, pero la cuenta Spot visible por CoinW no tiene saldo utilizable en {QUOTE_ASSET}. "
+                    "Verifica que el dinero esté en Spot Trading, que la API pertenezca a la misma cuenta y que tenga acceso Spot."
+                )
+                return (False, mensaje) if return_error else False
+            mensaje = (
+                f"API validada correctamente. Spot visible: total={total:.8f} {QUOTE_ASSET}, "
+                f"disponible={disponible:.8f} {QUOTE_ASSET}."
+            )
+            return (True, mensaje) if return_error else True
+        except CoinWEmptySpotBalanceError:
+            mensaje = (
+                "La API autenticó, pero CoinW devolvió la cuenta Spot vacía para esa API. "
+                "Revisa que el dinero esté en Spot Trading, que esa API pertenezca a la misma cuenta donde ves el saldo y que tenga acceso Spot."
+            )
+            return (False, mensaje) if return_error else False
         except CoinWApiError as exc:
             return (False, str(exc)) if return_error else False
         except Exception as exc:
