@@ -46,11 +46,108 @@ class InstrumentRule:
     quote_asset: str
 
 
+@dataclass
+class BalanceSnapshot:
+    balances: Dict[str, Dict[str, Decimal]]
+    payload_complete: Any
+    payload_available: Any
+
+
 class ExchangeClient:
     """Cliente real para CoinW Spot."""
 
     PUBLIC_ENDPOINT = "/api/v1/public"
     PRIVATE_ENDPOINT = "/api/v1/private"
+
+    _ASSET_FIELDS = (
+        "asset",
+        "currency",
+        "coin",
+        "currencyName",
+        "coinName",
+        "token",
+        "assetName",
+        "unit",
+    )
+    _AVAILABLE_FIELDS = (
+        "available",
+        "free",
+        "normal",
+        "usable",
+        "canUseAmount",
+        "remainAmount",
+        "remain",
+        "cash",
+    )
+    _LOCKED_FIELDS = (
+        "onOrders",
+        "frozen",
+        "locked",
+        "hold",
+        "freeze",
+        "lock",
+        "occupied",
+        "withdrawing",
+    )
+    _TOTAL_FIELDS = (
+        "total",
+        "amount",
+        "balance",
+        "normal",
+        "available",
+        "usable",
+        "free",
+        "canUseAmount",
+    )
+    _CONTAINER_KEYS = (
+        "data",
+        "balances",
+        "assets",
+        "items",
+        "rows",
+        "list",
+        "result",
+        "wallet",
+        "account",
+        "accounts",
+        "details",
+    )
+    _IGNORED_DIRECT_KEYS = {
+        "code",
+        "msg",
+        "message",
+        "success",
+        "failed",
+        "status",
+        "data",
+        "balances",
+        "assets",
+        "items",
+        "rows",
+        "list",
+        "result",
+        "wallet",
+        "account",
+        "accounts",
+        "details",
+        "available",
+        "total",
+        "free",
+        "normal",
+        "usable",
+        "frozen",
+        "locked",
+        "onorders",
+        "hold",
+        "freeze",
+        "lock",
+        "remain",
+        "remainamount",
+        "cash",
+        "count",
+        "timestamp",
+        "ts",
+    }
 
     def __init__(self, api_key: Optional[str] = None, api_secret: Optional[str] = None, timeout: int = 15):
         self.api_key = api_key
@@ -142,7 +239,6 @@ class ExchangeClient:
     def validar_credenciales(self) -> Dict[str, Any]:
         return self._private_request("returnBalances", {})
 
-
     @staticmethod
     def _to_decimal(value: Any) -> Decimal:
         try:
@@ -161,17 +257,49 @@ class ExchangeClient:
         return [candidate for candidate in candidates if candidate]
 
     @staticmethod
-    def _looks_like_asset_key(value: Any) -> bool:
-        text = str(value or "").strip()
-        return bool(text) and len(text) <= 15 and text.replace("_", "").replace("-", "").isalnum()
-
-    @staticmethod
     def _balance_preview(payload: Any, limit: int = 600) -> str:
         try:
             raw = json.dumps(payload, ensure_ascii=False, default=str)
         except Exception:
             raw = str(payload)
         return raw[:limit]
+
+    @staticmethod
+    def _is_numeric_like(value: Any) -> bool:
+        if isinstance(value, (int, float, Decimal)):
+            return True
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return False
+            try:
+                Decimal(text)
+                return True
+            except (InvalidOperation, ValueError):
+                return False
+        return False
+
+    @classmethod
+    def _is_direct_asset_key(cls, key: Any) -> bool:
+        text = str(key or "").strip()
+        if not text:
+            return False
+        lowered = text.lower()
+        if lowered in cls._IGNORED_DIRECT_KEYS:
+            return False
+        if len(text) > 20:
+            return False
+        compact = text.replace("_", "").replace("-", "")
+        return compact.isalnum()
+
+    @classmethod
+    def _has_balance_shape(cls, item: Dict[str, Any]) -> bool:
+        if not isinstance(item, dict):
+            return False
+        keys = {str(key) for key in item.keys()}
+        if any(field in keys for field in cls._AVAILABLE_FIELDS + cls._LOCKED_FIELDS + cls._TOTAL_FIELDS):
+            return True
+        return False
 
     def _normalize_balances_payload(self, payload_data: Any) -> Dict[str, Dict[str, Decimal]]:
         normalized: Dict[str, Dict[str, Decimal]] = {}
@@ -199,24 +327,18 @@ class ExchangeClient:
             if not asset:
                 return
             if isinstance(item, dict):
-                available = _max_decimal_from_keys(
-                    item,
-                    ("available", "free", "normal", "balance", "usable", "canUseAmount", "remainAmount", "remain", "cash", "total"),
-                )
-                locked = _max_decimal_from_keys(
-                    item,
-                    ("onOrders", "frozen", "locked", "hold", "freeze", "lock", "occupied", "withdrawing"),
-                )
-                total = _max_decimal_from_keys(
-                    item,
-                    ("total", "amount", "balance", "normal", "available", "usable", "free", "canUseAmount"),
-                )
-                if total <= 0:
-                    total = available + locked
-            else:
+                available = _max_decimal_from_keys(item, self._AVAILABLE_FIELDS)
+                locked = _max_decimal_from_keys(item, self._LOCKED_FIELDS)
+                total = _max_decimal_from_keys(item, self._TOTAL_FIELDS)
+                minimum_total = available + locked
+                if total <= 0 or total < minimum_total:
+                    total = minimum_total
+            elif self._is_numeric_like(item):
                 available = self._to_decimal(item)
                 locked = Decimal("0")
                 total = available
+            else:
+                return
             merge_balance(asset, available, locked, total)
 
         def walk(node: Any) -> None:
@@ -236,34 +358,26 @@ class ExchangeClient:
             if not isinstance(node, dict):
                 return
 
-            # Common nested containers
-            for nested_key in ("data", "balances", "assets", "items", "rows", "list", "result", "wallet", "account", "accounts", "details"):
+            asset_name = next((node.get(field) for field in self._ASSET_FIELDS if node.get(field)), None)
+            if asset_name:
+                store(asset_name, node)
+
+            for nested_key in self._CONTAINER_KEYS:
                 nested_value = node.get(nested_key)
                 if nested_value is not None and nested_value is not node:
                     walk(nested_value)
 
-            asset_name = (
-                node.get("asset")
-                or node.get("currency")
-                or node.get("coin")
-                or node.get("symbol")
-                or node.get("currencyName")
-                or node.get("coinName")
-                or node.get("name")
-            )
-            if asset_name:
-                store(asset_name, node)
-
-            # Direct map of asset -> balance dict/value
             direct_asset_entries = []
             for key, value in node.items():
-                if self._looks_like_asset_key(key) and (isinstance(value, (dict, str, int, float))):
+                if not self._is_direct_asset_key(key):
+                    continue
+                if isinstance(value, dict) and self._has_balance_shape(value):
                     direct_asset_entries.append((key, value))
-            if direct_asset_entries:
-                for key, value in direct_asset_entries:
-                    store(key, value)
+                elif self._is_numeric_like(value):
+                    direct_asset_entries.append((key, value))
+            for key, value in direct_asset_entries:
+                store(key, value)
 
-            # Fallback deep walk through arbitrary nested dict values
             for value in node.values():
                 if isinstance(value, (dict, list, str)):
                     walk(value)
@@ -281,20 +395,26 @@ class ExchangeClient:
                 return True
         return False
 
-    def _find_balance_entry(self, balances: Dict[str, Dict[str, Decimal]], asset: str) -> Dict[str, Decimal]:
-        for candidate in self._asset_candidates(asset):
-            item = balances.get(candidate.upper()) or balances.get(candidate)
-            if item is not None:
-                return item
-        return {"available": Decimal("0"), "locked": Decimal("0"), "total": Decimal("0")}
+    @staticmethod
+    def _merge_balances(*sources: Dict[str, Dict[str, Decimal]]) -> Dict[str, Dict[str, Decimal]]:
+        merged: Dict[str, Dict[str, Decimal]] = {}
+        for source in sources:
+            for asset, item in source.items():
+                current = merged.get(asset, {"available": Decimal("0"), "locked": Decimal("0"), "total": Decimal("0")})
+                available = item.get("available", Decimal("0"))
+                locked = item.get("locked", Decimal("0"))
+                total = item.get("total", Decimal("0"))
+                merged[asset] = {
+                    "available": available if available > current["available"] else current["available"],
+                    "locked": locked if locked > current["locked"] else current["locked"],
+                    "total": total if total > current["total"] else current["total"],
+                }
+        for asset, item in merged.items():
+            if item["total"] <= 0:
+                item["total"] = item["available"] + item["locked"]
+        return merged
 
-    def obtener_balance(self, asset: str = QUOTE_ASSET) -> float:
-        payload = self._private_request("returnBalances", {})
-        balances = self._normalize_balances_payload(payload.get("data", {}))
-        item = self._find_balance_entry(balances, asset)
-        return float(item.get("available", Decimal("0")) or 0)
-
-    def obtener_balances_completos(self) -> Dict[str, Dict[str, Decimal]]:
+    def _fetch_balance_snapshot(self, require_non_empty: bool = True) -> BalanceSnapshot:
         balances_complete: Dict[str, Dict[str, Decimal]] = {}
         balances_available: Dict[str, Dict[str, Decimal]] = {}
         payload_complete: Any = None
@@ -316,24 +436,14 @@ class ExchangeClient:
         except Exception:
             logger.exception("No se pudieron normalizar balances disponibles de CoinW")
 
-        merged: Dict[str, Dict[str, Decimal]] = {}
-        for source in (balances_complete, balances_available):
-            for asset, item in source.items():
-                current = merged.get(asset, {"available": Decimal("0"), "locked": Decimal("0"), "total": Decimal("0")})
-                available = item.get("available", Decimal("0"))
-                locked = item.get("locked", Decimal("0"))
-                total = item.get("total", Decimal("0"))
-                merged[asset] = {
-                    "available": available if available > current["available"] else current["available"],
-                    "locked": locked if locked > current["locked"] else current["locked"],
-                    "total": total if total > current["total"] else current["total"],
-                }
+        merged = self._merge_balances(balances_complete, balances_available)
+        snapshot = BalanceSnapshot(
+            balances=merged,
+            payload_complete=payload_complete,
+            payload_available=payload_available,
+        )
 
-        for asset, item in merged.items():
-            if item["total"] <= 0:
-                item["total"] = item["available"] + item["locked"]
-
-        if not self._balances_have_positive_amount(merged):
+        if require_non_empty and not self._balances_have_positive_amount(snapshot.balances):
             diagnostic_payload = {
                 "complete": payload_complete,
                 "available": payload_available,
@@ -348,30 +458,64 @@ class ExchangeClient:
                 payload=diagnostic_payload,
             )
 
-        logger.info(
-            "COINW_BALANCES_NORMALIZED | balances=%s",
-            {asset: {k: str(v) for k, v in item.items()} for asset, item in list(merged.items())[:10]},
-        )
+        if snapshot.balances:
+            logger.info(
+                "COINW_BALANCES_NORMALIZED | balances=%s",
+                {asset: {k: str(v) for k, v in item.items()} for asset, item in list(snapshot.balances.items())[:10]},
+            )
 
-        return merged
+        return snapshot
+
+    def _find_balance_entry(self, balances: Dict[str, Dict[str, Decimal]], asset: str) -> Dict[str, Decimal]:
+        for candidate in self._asset_candidates(asset):
+            item = balances.get(candidate.upper()) or balances.get(candidate)
+            if item is not None:
+                return item
+        return {"available": Decimal("0"), "locked": Decimal("0"), "total": Decimal("0")}
+
+    def obtener_balance(self, asset: str = QUOTE_ASSET) -> float:
+        payload = self._private_request("returnBalances", {})
+        balances = self._normalize_balances_payload(payload.get("data", {}))
+        item = self._find_balance_entry(balances, asset)
+        return float(item.get("available", Decimal("0")) or 0)
+
+    def obtener_balances_completos(self) -> Dict[str, Dict[str, Decimal]]:
+        return self._fetch_balance_snapshot(require_non_empty=True).balances
 
     def obtener_balance_disponible(self, asset: str = QUOTE_ASSET) -> Decimal:
-        balances = self.obtener_balances_completos()
-        item = self._find_balance_entry(balances, asset)
+        snapshot = self._fetch_balance_snapshot(require_non_empty=True)
+        item = self._find_balance_entry(snapshot.balances, asset)
         return item.get("available", Decimal("0"))
 
     def obtener_balance_total(self, asset: str = QUOTE_ASSET) -> Decimal:
-        balances = self.obtener_balances_completos()
-        item = self._find_balance_entry(balances, asset)
+        snapshot = self._fetch_balance_snapshot(require_non_empty=True)
+        item = self._find_balance_entry(snapshot.balances, asset)
         total = item.get("total", Decimal("0"))
         if total <= 0:
             total = item.get("available", Decimal("0")) + item.get("locked", Decimal("0"))
         return total
 
+    def validar_acceso_spot(self, quote_asset: str = QUOTE_ASSET) -> Dict[str, Decimal]:
+        snapshot = self._fetch_balance_snapshot(require_non_empty=True)
+        quote_item = self._find_balance_entry(snapshot.balances, quote_asset)
+        quote_total = quote_item.get("total", Decimal("0"))
+        if quote_total <= 0:
+            quote_total = quote_item.get("available", Decimal("0")) + quote_item.get("locked", Decimal("0"))
+        quote_available = quote_item.get("available", Decimal("0"))
+        return {
+            "quote_available": quote_available,
+            "quote_total": quote_total,
+            "asset_count": Decimal(str(len(snapshot.balances))),
+        }
+
     def estimar_capital_total_en_quote(self, quote_asset: str = QUOTE_ASSET) -> Dict[str, Decimal]:
-        balances = self.obtener_balances_completos()
-        quote_total = self.obtener_balance_total(quote_asset)
-        quote_available = self.obtener_balance_disponible(quote_asset)
+        snapshot = self._fetch_balance_snapshot(require_non_empty=True)
+        balances = snapshot.balances
+        quote_item = self._find_balance_entry(balances, quote_asset)
+        quote_total = quote_item.get("total", Decimal("0"))
+        if quote_total <= 0:
+            quote_total = quote_item.get("available", Decimal("0")) + quote_item.get("locked", Decimal("0"))
+        quote_available = quote_item.get("available", Decimal("0"))
         total_estimated = quote_total
 
         try:
