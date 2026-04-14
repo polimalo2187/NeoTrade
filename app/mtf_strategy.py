@@ -112,11 +112,16 @@ class MTFStrategy:
         fast_slope = self._slope_pct(df["ema_fast"], 3)
         slow_slope = self._slope_pct(df["ema_slow"], 3)
         atr_pct = float(last["atr_pct"])
-        bullish_stack = float(last["ema_fast"]) > float(last["ema_slow"]) and float(last["close"]) > float(last["ema_fast"])
-        slope_ok = fast_slope >= TREND_EMA_FAST_SLOPE_MIN and slow_slope >= TREND_EMA_SLOW_SLOPE_MIN
-        rsi_ok = float(last["rsi"]) >= RSI_TREND_MIN
+
+        fast_slope_gate = TREND_EMA_FAST_SLOPE_MIN * 0.5
+        slow_slope_gate = TREND_EMA_SLOW_SLOPE_MIN * 0.5
+        rsi_gate = max(RSI_TREND_MIN - 2, 45)
+
+        bullish_stack = float(last["ema_fast"]) > float(last["ema_slow"]) and float(last["close"]) >= float(last["ema_fast"]) * 0.998
+        slope_ok = fast_slope >= fast_slope_gate and slow_slope >= slow_slope_gate
+        rsi_ok = float(last["rsi"]) >= rsi_gate
         vol_ok = MIN_ATR_PCT <= atr_pct <= MAX_ATR_PCT
-        higher_close = float(last["close"]) > float(df.iloc[-4]["close"]) if len(df) >= 4 else True
+        higher_close = float(last["close"]) >= float(df.iloc[-4]["close"]) * 0.997 if len(df) >= 4 else True
 
         passed = bullish_stack and slope_ok and rsi_ok and vol_ok and higher_close
         score = 0.0
@@ -124,16 +129,16 @@ class MTFStrategy:
         if passed:
             score += 20
             components.append(("trend_context", 20))
-            if fast_slope >= TREND_EMA_FAST_SLOPE_MIN * 1.6:
+            if fast_slope >= TREND_EMA_FAST_SLOPE_MIN * 1.25:
                 score += 8
                 components.append(("trend_fast_slope", 8))
-            if slow_slope >= TREND_EMA_SLOW_SLOPE_MIN * 1.4:
+            if slow_slope >= TREND_EMA_SLOW_SLOPE_MIN * 1.2:
                 score += 5
                 components.append(("trend_slow_slope", 5))
-            if float(last["rsi"]) >= RSI_TREND_MIN + 4:
+            if float(last["rsi"]) >= RSI_TREND_MIN + 2:
                 score += 4
                 components.append(("trend_rsi_strength", 4))
-            if atr_pct >= max(MIN_ATR_PCT * 1.2, 0.0) and atr_pct <= MAX_ATR_PCT * 0.8:
+            if atr_pct >= max(MIN_ATR_PCT * 1.1, 0.0) and atr_pct <= MAX_ATR_PCT * 0.85:
                 score += 3
                 components.append(("trend_volatility_ok", 3))
         info = {
@@ -141,6 +146,14 @@ class MTFStrategy:
             "slow_slope": round(slow_slope, 6),
             "atr_pct": round(atr_pct, 6),
             "rsi": round(float(last["rsi"]), 2),
+            "bullish_stack": bullish_stack,
+            "slope_ok": slope_ok,
+            "rsi_ok": rsi_ok,
+            "vol_ok": vol_ok,
+            "higher_close": higher_close,
+            "fast_slope_gate": round(fast_slope_gate, 6),
+            "slow_slope_gate": round(slow_slope_gate, 6),
+            "rsi_gate": round(rsi_gate, 2),
         }
         return passed, score, components, info
 
@@ -151,11 +164,18 @@ class MTFStrategy:
         recent_low = float(window["low"].min())
         last_close = float(last["close"])
         depth_pct = 0.0 if recent_high <= 0 else max(0.0, (recent_high - last_close) / recent_high)
-        real_pullback = int((window["low"] < window["ema_fast"]).sum()) >= 1 or int((window["close"] < window["ema_fast"]).sum()) >= 2
-        trend_intact = recent_low > float(last["ema_slow"]) * 0.995
-        rsi_ok = RSI_PULLBACK_MIN <= float(last["rsi"]) <= RSI_PULLBACK_MAX
-        reclaim_fast = last_close > float(last["ema_fast"])
-        depth_ok = PULLBACK_MIN_DEPTH_PCT <= depth_pct <= PULLBACK_MAX_DEPTH_PCT
+
+        low_below_fast = int((window["low"] < window["ema_fast"]).sum())
+        close_below_fast = int((window["close"] < window["ema_fast"]).sum())
+        real_pullback = low_below_fast >= 1 or close_below_fast >= 1
+        trend_intact = recent_low > float(last["ema_slow"]) * 0.99
+        rsi_min_gate = max(RSI_PULLBACK_MIN - 2, 35)
+        rsi_max_gate = min(RSI_PULLBACK_MAX + 4, 75)
+        rsi_ok = rsi_min_gate <= float(last["rsi"]) <= rsi_max_gate
+        reclaim_fast = last_close >= float(last["ema_fast"]) * 0.997
+        min_depth_gate = max(PULLBACK_MIN_DEPTH_PCT * 0.5, 0.0005)
+        max_depth_gate = max(PULLBACK_MAX_DEPTH_PCT * 1.15, min_depth_gate)
+        depth_ok = min_depth_gate <= depth_pct <= max_depth_gate
         passed = real_pullback and trend_intact and rsi_ok and reclaim_fast and depth_ok
 
         score = 0.0
@@ -163,14 +183,14 @@ class MTFStrategy:
         if passed:
             score += 15
             components.append(("pullback_valid", 15))
-            ideal_mid = (PULLBACK_MIN_DEPTH_PCT + PULLBACK_MAX_DEPTH_PCT) / 2
-            if abs(depth_pct - ideal_mid) <= (PULLBACK_MAX_DEPTH_PCT - PULLBACK_MIN_DEPTH_PCT) * 0.2:
+            ideal_mid = (min_depth_gate + max_depth_gate) / 2
+            if abs(depth_pct - ideal_mid) <= (max_depth_gate - min_depth_gate) * 0.22:
                 score += 8
                 components.append(("pullback_depth_ideal", 8))
-            if float(last["rsi"]) <= (RSI_PULLBACK_MIN + RSI_PULLBACK_MAX) / 2:
+            if float(last["rsi"]) <= (rsi_min_gate + rsi_max_gate) / 2:
                 score += 4
                 components.append(("pullback_rsi_cooldown", 4))
-            if int((window["close"] < window["open"]).sum()) >= 2:
+            if int((window["close"] < window["open"]).sum()) >= 1:
                 score += 3
                 components.append(("pullback_bearish_sequence", 3))
         info = {
@@ -178,6 +198,17 @@ class MTFStrategy:
             "recent_high": round(recent_high, 8),
             "recent_low": round(recent_low, 8),
             "rsi": round(float(last["rsi"]), 2),
+            "real_pullback": real_pullback,
+            "trend_intact": trend_intact,
+            "rsi_ok": rsi_ok,
+            "reclaim_fast": reclaim_fast,
+            "depth_ok": depth_ok,
+            "low_below_fast": low_below_fast,
+            "close_below_fast": close_below_fast,
+            "min_depth_gate": round(min_depth_gate, 6),
+            "max_depth_gate": round(max_depth_gate, 6),
+            "rsi_min_gate": round(rsi_min_gate, 2),
+            "rsi_max_gate": round(rsi_max_gate, 2),
         }
         return passed, score, components, info
 
@@ -186,25 +217,29 @@ class MTFStrategy:
         prev = df.iloc[-2]
         prev2 = df.iloc[-3] if len(df) >= 3 else prev
 
+        body_ratio_gate = max(ENTRY_MIN_BODY_RATIO * 0.85, 0.22)
+        close_position_gate = max(ENTRY_MIN_CLOSE_POSITION - 0.08, 0.45)
+        volume_ratio_gate = max(ENTRY_MIN_VOLUME_RATIO - 0.1, 0.75)
+
         bullish_reclaim = (
-            float(prev["low"]) <= float(prev["ema_fast"]) and
-            float(last["close"]) > float(last["ema_fast"]) and
-            float(last["close"]) > float(prev["high"])
+            float(prev["low"]) <= float(prev["ema_fast"]) * 1.003 and
+            float(last["close"]) >= float(last["ema_fast"]) * 0.998 and
+            float(last["close"]) >= float(prev["high"]) * 0.998
         )
         bullish_body = float(last["close"]) > float(last["open"])
         body_ratio = self._body_ratio(last)
         close_position = self._close_position(last)
         volume_ratio = float(last.get("volume_ratio", 1.0))
-        rsi_reaccel = float(last["rsi"]) > float(prev["rsi"]) >= float(prev2["rsi"])
+        rsi_reaccel = float(last["rsi"]) >= float(prev["rsi"]) - 0.5 and float(prev["rsi"]) >= float(prev2["rsi"]) - 1.0
         extension_vs_ema = (float(last["close"]) - float(last["ema_fast"])) / max(float(last["close"]), 1e-12)
-        extension_ok = extension_vs_ema <= max(float(last["atr_pct"]) * 1.1, 0.012)
+        extension_ok = extension_vs_ema <= max(float(last["atr_pct"]) * 1.5, 0.018)
 
         passed = (
             bullish_reclaim
             and bullish_body
-            and body_ratio >= ENTRY_MIN_BODY_RATIO
-            and close_position >= ENTRY_MIN_CLOSE_POSITION
-            and volume_ratio >= ENTRY_MIN_VOLUME_RATIO
+            and body_ratio >= body_ratio_gate
+            and close_position >= close_position_gate
+            and volume_ratio >= volume_ratio_gate
             and rsi_reaccel
             and extension_ok
         )
@@ -214,16 +249,16 @@ class MTFStrategy:
         if passed:
             score += 20
             components.append(("entry_reclaim", 20))
-            if body_ratio >= ENTRY_MIN_BODY_RATIO + 0.12:
+            if body_ratio >= body_ratio_gate + 0.10:
                 score += 8
                 components.append(("entry_body_quality", 8))
-            if close_position >= ENTRY_MIN_CLOSE_POSITION + 0.10:
+            if close_position >= close_position_gate + 0.10:
                 score += 6
                 components.append(("entry_close_strength", 6))
-            if volume_ratio >= ENTRY_MIN_VOLUME_RATIO + 0.15:
+            if volume_ratio >= volume_ratio_gate + 0.12:
                 score += 6
                 components.append(("entry_volume_confirm", 6))
-            if float(last["close"]) > float(df.tail(5)["high"].max()) * 0.998:
+            if float(last["close"]) >= float(df.tail(5)["high"].max()) * 0.997:
                 score += 5
                 components.append(("entry_micro_breakout", 5))
         info = {
@@ -232,6 +267,13 @@ class MTFStrategy:
             "volume_ratio": round(volume_ratio, 6),
             "extension_vs_ema": round(extension_vs_ema, 6),
             "rsi": round(float(last["rsi"]), 2),
+            "bullish_reclaim": bullish_reclaim,
+            "bullish_body": bullish_body,
+            "rsi_reaccel": rsi_reaccel,
+            "extension_ok": extension_ok,
+            "body_ratio_gate": round(body_ratio_gate, 6),
+            "close_position_gate": round(close_position_gate, 6),
+            "volume_ratio_gate": round(volume_ratio_gate, 6),
         }
         return passed, score, components, info
 
@@ -390,6 +432,7 @@ class MTFStrategy:
                     "trend": trend_info,
                     "pullback": pullback_info,
                     "entry": entry_info,
+                    "components": components,
                     "stop_distance_pct": round(stop_distance_pct, 6),
                 },
                 "signal": None,
