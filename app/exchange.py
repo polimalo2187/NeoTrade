@@ -577,6 +577,35 @@ class ExchangeClient:
             )
         return instrumentos
 
+    @staticmethod
+    def _extract_quote_volume(ticker_item: Dict[str, Any], last_price: float) -> float:
+        direct_fields = (
+            "quoteVolume",
+            "quoteVol",
+            "volumeQuote",
+            "volumeUsdt",
+            "usdtVolume",
+            "turnover",
+            "amount",
+            "value",
+            "volValue",
+        )
+        for field in direct_fields:
+            try:
+                value = float(ticker_item.get(field, 0) or 0)
+            except (TypeError, ValueError):
+                value = 0.0
+            if value > 0:
+                return value
+
+        try:
+            base_volume = float(ticker_item.get("baseVolume", 0) or 0)
+        except (TypeError, ValueError):
+            base_volume = 0.0
+        if base_volume > 0 and last_price > 0:
+            return base_volume * last_price
+        return 0.0
+
     def obtener_pares_disponibles(
         self,
         volumen_minimo: float,
@@ -593,16 +622,31 @@ class ExchangeClient:
                 continue
             if int(item.get("isFrozen", 1)) != 0:
                 continue
-            info = symbol_info.get(symbol)
-            if not info or info.state != 1:
-                continue
-            volume = float(item.get("baseVolume", 0) or 0)
-            if volume < volumen_minimo:
-                continue
-            candidates.append((symbol, volume))
 
-        candidates.sort(key=lambda item: item[1], reverse=True)
-        symbols = [symbol for symbol, _ in candidates]
+            info = symbol_info.get(symbol)
+            if not info or info.state != 1 or info.quote_asset != quote_asset.upper():
+                continue
+
+            try:
+                last_price = float(item.get("last", 0) or 0)
+            except (TypeError, ValueError):
+                last_price = 0.0
+            if last_price <= 0:
+                continue
+
+            quote_volume = self._extract_quote_volume(item, last_price)
+            if quote_volume < volumen_minimo:
+                continue
+
+            try:
+                base_volume = float(item.get("baseVolume", 0) or 0)
+            except (TypeError, ValueError):
+                base_volume = 0.0
+
+            candidates.append((symbol, quote_volume, base_volume))
+
+        candidates.sort(key=lambda item: (-item[1], -item[2], item[0]))
+        symbols = [symbol for symbol, _, _ in candidates]
         return symbols[:max_pairs] if max_pairs else symbols
 
     def _parse_klines_payload(self, payload: Dict[str, Any], symbol: str) -> pd.DataFrame:
