@@ -101,7 +101,9 @@ class MTFStrategy:
         data["atr"] = MTFStrategy._atr(data, ATR_PERIOD)
         data["atr_pct"] = (data["atr"] / data["close"].replace(0, pd.NA)).fillna(0.0)
         data["volume_sma"] = data["volume"].rolling(20, min_periods=1).mean()
-        data["volume_ratio"] = (data["volume"] / data["volume_sma"].replace(0, pd.NA)).fillna(1.0)
+        volume_sma = pd.to_numeric(data["volume_sma"], errors="coerce")
+        volume_denom = volume_sma.where(volume_sma != 0)
+        data["volume_ratio"] = (pd.to_numeric(data["volume"], errors="coerce") / volume_denom).fillna(1.0)
         data["date_ms"] = (pd.to_datetime(data["date"], utc=True).astype("int64") // 1_000_000).astype("int64")
         return data.dropna(subset=["ema_fast", "ema_slow", "rsi", "atr"]).reset_index(drop=True)
 
