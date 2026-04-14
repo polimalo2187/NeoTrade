@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -254,39 +254,76 @@ class MTFStrategy:
         activation = entry_price + (risk * DYNAMIC_TP_ACTIVATION_R)
         return round(activation, 8)
 
-    def analizar(
+    def analizar_detallado(
         self,
         df_trend: pd.DataFrame,
         df_pullback: pd.DataFrame,
         df_entry: pd.DataFrame,
-    ) -> Optional[Dict]:
-        if min(len(df_trend), len(df_pullback), len(df_entry)) < max(EMA_SLOW + 8, ATR_PERIOD + 8, RSI_PERIOD + 8):
-            return None
+    ) -> Dict[str, Any]:
+        required_len = max(EMA_SLOW + 8, ATR_PERIOD + 8, RSI_PERIOD + 8)
+        raw_lengths = {
+            "trend_len": len(df_trend),
+            "pullback_len": len(df_pullback),
+            "entry_len": len(df_entry),
+            "required_len": required_len,
+        }
+        if min(len(df_trend), len(df_pullback), len(df_entry)) < required_len:
+            return {
+                "accepted": False,
+                "reason": "INSUFFICIENT_RAW_CANDLES",
+                "detail": raw_lengths,
+                "signal": None,
+            }
 
         df_trend = self.add_indicators(df_trend)
         df_pullback = self.add_indicators(df_pullback)
         df_entry = self.add_indicators(df_entry)
+        indicator_lengths = {
+            "trend_len": len(df_trend),
+            "pullback_len": len(df_pullback),
+            "entry_len": len(df_entry),
+        }
         if min(len(df_trend), len(df_pullback), len(df_entry)) < 10:
-            return None
+            return {
+                "accepted": False,
+                "reason": "INSUFFICIENT_INDICATOR_CANDLES",
+                "detail": indicator_lengths,
+                "signal": None,
+            }
 
         score = 0.0
         components: List[Tuple[str, float]] = []
 
         trend_ok, trend_score, trend_components, trend_info = self._trend_filter(df_trend)
         if not trend_ok:
-            return None
+            return {
+                "accepted": False,
+                "reason": "TREND_FILTER_REJECTED",
+                "detail": {**trend_info, "score_partial": round(score, 2)},
+                "signal": None,
+            }
         score += trend_score
         components.extend(trend_components)
 
         pullback_ok, pullback_score, pullback_components, pullback_info = self._pullback_filter(df_pullback)
         if not pullback_ok:
-            return None
+            return {
+                "accepted": False,
+                "reason": "PULLBACK_FILTER_REJECTED",
+                "detail": {**pullback_info, "score_partial": round(score, 2)},
+                "signal": None,
+            }
         score += pullback_score
         components.extend(pullback_components)
 
         entry_ok, entry_score, entry_components, entry_info = self._entry_filter(df_entry)
         if not entry_ok:
-            return None
+            return {
+                "accepted": False,
+                "reason": "ENTRY_FILTER_REJECTED",
+                "detail": {**entry_info, "score_partial": round(score, 2)},
+                "signal": None,
+            }
         score += entry_score
         components.extend(entry_components)
 
@@ -295,15 +332,43 @@ class MTFStrategy:
         initial_stop_loss = self._calc_initial_stop(df_entry, entry_price)
         risk_per_unit = round(entry_price - initial_stop_loss, 8)
         if risk_per_unit <= 0:
-            return None
+            return {
+                "accepted": False,
+                "reason": "INVALID_RISK_PER_UNIT",
+                "detail": {
+                    "entry_price": entry_price,
+                    "initial_stop_loss": initial_stop_loss,
+                    "risk_per_unit": risk_per_unit,
+                },
+                "signal": None,
+            }
 
         stop_distance_pct = risk_per_unit / max(entry_price, 1e-12)
         if stop_distance_pct > MAX_STOP_DISTANCE_PCT:
-            return None
+            return {
+                "accepted": False,
+                "reason": "STOP_DISTANCE_TOO_WIDE",
+                "detail": {
+                    "entry_price": entry_price,
+                    "initial_stop_loss": initial_stop_loss,
+                    "stop_distance_pct": round(stop_distance_pct, 6),
+                    "max_stop_distance_pct": round(MAX_STOP_DISTANCE_PCT, 6),
+                },
+                "signal": None,
+            }
 
         dynamic_tp_activation_price = self._calc_dynamic_activation(entry_price, initial_stop_loss)
         if dynamic_tp_activation_price <= entry_price:
-            return None
+            return {
+                "accepted": False,
+                "reason": "INVALID_DYNAMIC_TP",
+                "detail": {
+                    "entry_price": entry_price,
+                    "initial_stop_loss": initial_stop_loss,
+                    "dynamic_tp_activation_price": dynamic_tp_activation_price,
+                },
+                "signal": None,
+            }
 
         if stop_distance_pct <= MAX_STOP_DISTANCE_PCT * 0.55:
             score += 5
@@ -314,9 +379,21 @@ class MTFStrategy:
 
         score = min(MAX_SCORE, round(score, 2))
         if score < MIN_SIGNAL_SCORE:
-            return None
+            return {
+                "accepted": False,
+                "reason": "SCORE_TOO_LOW",
+                "detail": {
+                    "score": score,
+                    "min_signal_score": MIN_SIGNAL_SCORE,
+                    "trend": trend_info,
+                    "pullback": pullback_info,
+                    "entry": entry_info,
+                    "stop_distance_pct": round(stop_distance_pct, 6),
+                },
+                "signal": None,
+            }
 
-        return {
+        signal = {
             "direction": "LONG",
             "entry_price": entry_price,
             "initial_stop_loss": initial_stop_loss,
@@ -342,6 +419,25 @@ class MTFStrategy:
                 "weakness_rsi_delta": WEAKNESS_RSI_DELTA,
             },
         }
+        return {
+            "accepted": True,
+            "reason": "OK",
+            "detail": {
+                "score": score,
+                "entry_price": entry_price,
+                "stop_distance_pct": round(stop_distance_pct, 6),
+            },
+            "signal": signal,
+        }
+
+    def analizar(
+        self,
+        df_trend: pd.DataFrame,
+        df_pullback: pd.DataFrame,
+        df_entry: pd.DataFrame,
+    ) -> Optional[Dict]:
+        diagnostic = self.analizar_detallado(df_trend, df_pullback, df_entry)
+        return diagnostic.get("signal")
 
     def process_manager_candle(self, state: Dict, row: pd.Series, previous_row: Optional[pd.Series] = None) -> Dict:
         updates: Dict = {}
