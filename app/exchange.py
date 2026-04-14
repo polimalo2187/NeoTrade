@@ -757,6 +757,78 @@ class ExchangeClient:
             funds = rule.max_buy_amount.quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
         return funds
 
+    def evaluar_compra_mercado(self, symbol: str, funds: Decimal, rule: InstrumentRule, reference_price: Decimal) -> Dict[str, Any]:
+        requested_quote = self._to_decimal(funds).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+        reference_price = self._to_decimal(reference_price)
+        effective_quote = requested_quote
+        quote_capped = False
+        if rule.max_buy_amount > 0 and effective_quote > rule.max_buy_amount:
+            effective_quote = rule.max_buy_amount.quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+            quote_capped = True
+
+        if requested_quote <= 0 or effective_quote <= 0:
+            return {
+                "symbol": symbol.upper(),
+                "executable": False,
+                "reason": "NO_QUOTE_TO_USE",
+                "requested_quote": requested_quote,
+                "effective_quote": effective_quote,
+                "reference_price": reference_price,
+                "estimated_amount": Decimal("0"),
+                "adjusted_amount": Decimal("0"),
+                "min_quote_by_amount": rule.min_buy_amount,
+                "min_quote_by_count": Decimal("0"),
+                "min_quote_required": rule.min_buy_amount,
+                "quote_capped": quote_capped,
+            }
+
+        if reference_price <= 0:
+            return {
+                "symbol": symbol.upper(),
+                "executable": False,
+                "reason": "INVALID_REFERENCE_PRICE",
+                "requested_quote": requested_quote,
+                "effective_quote": effective_quote,
+                "reference_price": reference_price,
+                "estimated_amount": Decimal("0"),
+                "adjusted_amount": Decimal("0"),
+                "min_quote_by_amount": rule.min_buy_amount,
+                "min_quote_by_count": Decimal("0"),
+                "min_quote_required": rule.min_buy_amount,
+                "quote_capped": quote_capped,
+            }
+
+        estimated_amount = (effective_quote / reference_price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+        adjusted_amount = self._quantize(estimated_amount, rule.count_precision)
+        min_quote_by_amount = max(rule.min_buy_amount, Decimal("0"))
+        min_quote_by_count = Decimal("0")
+        if rule.min_buy_count > 0:
+            min_quote_by_count = (rule.min_buy_count * reference_price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+        min_quote_required = max(min_quote_by_amount, min_quote_by_count)
+
+        reason = None
+        if effective_quote < min_quote_by_amount:
+            reason = "BELOW_MIN_BUY_AMOUNT"
+        elif adjusted_amount <= 0:
+            reason = "ADJUSTED_AMOUNT_ZERO"
+        elif rule.min_buy_count > 0 and adjusted_amount < rule.min_buy_count:
+            reason = "BELOW_MIN_BUY_COUNT"
+
+        return {
+            "symbol": symbol.upper(),
+            "executable": reason is None,
+            "reason": reason or "OK",
+            "requested_quote": requested_quote,
+            "effective_quote": effective_quote,
+            "reference_price": reference_price,
+            "estimated_amount": estimated_amount,
+            "adjusted_amount": adjusted_amount,
+            "min_quote_by_amount": min_quote_by_amount,
+            "min_quote_by_count": min_quote_by_count,
+            "min_quote_required": min_quote_required,
+            "quote_capped": quote_capped,
+        }
+
     def crear_orden_mercado_buy(self, symbol: str, funds: Decimal, rule: InstrumentRule) -> Dict[str, Any]:
         funds = self.ajustar_funds(funds, rule)
         return self._private_request(
