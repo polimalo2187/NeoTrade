@@ -187,7 +187,7 @@ class TradingEngine:
             telegram_id = usuario["telegram_id"]
             try:
                 client = ExchangeClient(usuario.get("api_key"), usuario.get("api_secret"))
-                self._refresh_user_capital_snapshot(usuario, client)
+                capital_snapshot = self._refresh_user_capital_snapshot(usuario, client)
                 active_position = usuario.get("active_position")
                 if active_position:
                     logger.info(
@@ -208,7 +208,7 @@ class TradingEngine:
                             existing_invoice.get("asset") or QUOTE_ASSET,
                         )
                         continue
-                    self._open_trade_from_market_scan(usuario, client, market_scan)
+                    self._open_trade_from_market_scan(usuario, client, market_scan, capital_snapshot)
                 UsuarioModel.actualizar_engine_error(telegram_id, None)
             except CoinWApiError as exc:
                 logger.warning("Usuario %s | CoinW error: %s", telegram_id, exc)
@@ -217,11 +217,12 @@ class TradingEngine:
                 logger.exception("Usuario %s | error inesperado", telegram_id)
                 UsuarioModel.actualizar_engine_error(telegram_id, str(exc))
 
-    def _refresh_user_capital_snapshot(self, usuario: Dict, client: ExchangeClient) -> None:
+    def _refresh_user_capital_snapshot(self, usuario: Dict, client: ExchangeClient) -> Dict[str, Decimal]:
         capital = client.estimar_capital_total_en_quote(QUOTE_ASSET)
         capital_total = float(capital["capital_total_estimated"])
         capital_activo = capital_total * CAPITAL_ACTIVO_PORC
         UsuarioModel.actualizar_capital_snapshot(usuario["telegram_id"], capital_total, capital_activo)
+        return capital
 
     def _get_candidate_symbols(self) -> List[str]:
         now = time.time()
@@ -358,9 +359,66 @@ class TradingEngine:
         if len(samples) < 8:
             samples.append(f"{symbol}:OK[score={signal.get('score')}; entry={signal.get('entry_price')}]")
 
-    def _open_trade_from_market_scan(self, usuario: Dict, client: ExchangeClient, market_scan: Dict[str, Any]) -> None:
+    def _serialize_execution_plan(self, plan: Dict[str, Any]) -> str:
+        detail = {
+            "requested_quote": self._fmt(plan.get("requested_quote")),
+            "effective_quote": self._fmt(plan.get("effective_quote")),
+            "min_quote_required": self._fmt(plan.get("min_quote_required")),
+            "min_quote_by_amount": self._fmt(plan.get("min_quote_by_amount")),
+            "min_quote_by_count": self._fmt(plan.get("min_quote_by_count")),
+            "adjusted_amount": self._fmt(plan.get("adjusted_amount")),
+            "reference_price": self._fmt(plan.get("reference_price")),
+            "quote_capped": bool(plan.get("quote_capped")),
+        }
+        return self._serialize_scan_detail(detail)
+
+    def _select_signal_for_user(
+        self,
+        client: ExchangeClient,
+        accepted_signals: List[Dict[str, Any]],
+        requested_quote_to_use: Decimal,
+    ) -> Dict[str, Any]:
+        executable_signals: List[Dict[str, Any]] = []
+        blocked_counts: Counter = Counter()
+        blocked_samples: List[str] = []
+
+        for signal in accepted_signals:
+            symbol = signal.get("symbol")
+            rule = self._symbol_rules.get(symbol)
+            if not rule:
+                blocked_counts["MISSING_RULE"] += 1
+                if len(blocked_samples) < 8:
+                    blocked_samples.append(f"{symbol}:MISSING_RULE[requested_quote={self._fmt(requested_quote_to_use)}]")
+                continue
+
+            execution_plan = client.evaluar_compra_mercado(
+                symbol=symbol,
+                funds=requested_quote_to_use,
+                rule=rule,
+                reference_price=Decimal(str(signal.get("entry_price") or 0)),
+            )
+            if not execution_plan.get("executable"):
+                reason = execution_plan.get("reason") or "NOT_EXECUTABLE"
+                blocked_counts[reason] += 1
+                if len(blocked_samples) < 8:
+                    blocked_samples.append(f"{symbol}:{reason}[{self._serialize_execution_plan(execution_plan)}]")
+                continue
+
+            enriched_signal = dict(signal)
+            enriched_signal["execution_plan"] = execution_plan
+            executable_signals.append(enriched_signal)
+
+        best_signal = executable_signals[0] if executable_signals else None
+        return {
+            "best_signal": best_signal,
+            "executable_count": len(executable_signals),
+            "blocked_counts": dict(blocked_counts),
+            "blocked_samples": blocked_samples,
+        }
+
+    def _open_trade_from_market_scan(self, usuario: Dict, client: ExchangeClient, market_scan: Dict[str, Any], capital_snapshot: Dict[str, Decimal]) -> None:
         telegram_id = usuario["telegram_id"]
-        available_quote = client.obtener_balance_disponible(QUOTE_ASSET)
+        available_quote = capital_snapshot.get("quote_available", Decimal("0"))
         symbols = market_scan.get("symbols") or []
         accepted_signals = market_scan.get("accepted_signals") or []
         reason_counts = market_scan.get("reason_counts") or {}
@@ -399,83 +457,72 @@ class TradingEngine:
             )
             return
 
-        quote_to_use = (available_quote * Decimal(str(CAPITAL_ACTIVO_PORC))).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
-        best_signal = None
-        blocked_symbols: List[str] = []
-        for signal in accepted_signals:
-            rule = self._symbol_rules.get(signal["symbol"])
-            if not rule:
-                continue
-            min_required = max(rule.min_buy_amount, Decimal(str(MIN_USDT_ORDER)))
-            if quote_to_use < min_required:
-                blocked_symbols.append(f"{signal['symbol']}[required={self._fmt(min_required)}]")
-                continue
-            best_signal = signal
-            break
+        requested_quote_to_use = (available_quote * Decimal(str(CAPITAL_ACTIVO_PORC))).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+        selection = self._select_signal_for_user(client, accepted_signals, requested_quote_to_use)
+        best_signal = selection.get("best_signal")
 
         if not best_signal:
             logger.warning(
-                "SCAN_BLOCKED_MIN_NOTIONAL | telegram_id=%s | usuario=%s | quote_to_use=%s %s | accepted_signals=%s | blocked_symbols=%s",
+                "SCAN_RESULT_GLOBAL_SIGNAL_BLOCKED_FOR_USER | telegram_id=%s | usuario=%s | global_candidates=%s | requested_quote_to_use=%s %s | blocked_summary=%s | blocked_samples=%s",
                 telegram_id,
                 self._user_name(usuario),
-                self._fmt(quote_to_use),
-                QUOTE_ASSET,
                 len(accepted_signals),
-                " | ".join(blocked_symbols[:5]) if blocked_symbols else "none",
+                self._fmt(requested_quote_to_use),
+                QUOTE_ASSET,
+                self._format_reason_counts(selection.get("blocked_counts") or {}),
+                self._format_scan_samples(selection.get("blocked_samples") or []),
             )
             return
 
+        execution_plan = best_signal["execution_plan"]
+        rule = self._symbol_rules[best_signal["symbol"]]
+        effective_quote_to_use = execution_plan["effective_quote"]
+        fallback_price = Decimal(str(best_signal["entry_price"]))
+
         logger.info(
-            "SCAN_RESULT_CANDIDATE | telegram_id=%s | usuario=%s | symbols=%s | accepted_signals=%s | best_symbol=%s | best_score=%s | best_entry=%s | rejection_summary=%s | samples=%s",
+            "SCAN_RESULT_CANDIDATE | telegram_id=%s | usuario=%s | symbols=%s | global_candidates=%s | executable_candidates=%s | best_symbol=%s | best_score=%s | best_entry=%s | requested_quote_to_use=%s %s | effective_quote_to_use=%s %s | blocked_for_user_summary=%s | rejection_summary=%s | samples=%s",
             telegram_id,
             self._user_name(usuario),
             len(symbols),
             len(accepted_signals),
+            selection.get("executable_count") or 0,
             best_signal["symbol"],
             self._fmt(best_signal["score"], 2),
             self._fmt(best_signal["entry_price"]),
+            self._fmt(requested_quote_to_use),
+            rule.quote_asset,
+            self._fmt(effective_quote_to_use),
+            rule.quote_asset,
+            self._format_reason_counts(selection.get("blocked_counts") or {}),
             self._format_reason_counts(reason_counts),
             self._format_scan_samples(samples),
         )
 
-        rule = self._symbol_rules[best_signal["symbol"]]
-        quote_to_use = (available_quote * Decimal(str(CAPITAL_ACTIVO_PORC))).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
-        min_required = max(rule.min_buy_amount, Decimal(str(MIN_USDT_ORDER)))
-        if quote_to_use < min_required:
-            logger.warning(
-                "SCAN_BLOCKED_MIN_NOTIONAL | telegram_id=%s | symbol=%s | quote_to_use=%s %s | min_required=%s %s | exchange_min_buy_amount=%s",
-                telegram_id,
-                best_signal["symbol"],
-                self._fmt(quote_to_use),
-                rule.quote_asset,
-                self._fmt(min_required),
-                rule.quote_asset,
-                self._fmt(rule.min_buy_amount),
-            )
-            return
-
-        fallback_price = Decimal(str(best_signal["entry_price"]))
         if DRY_RUN:
-            amount = (quote_to_use / fallback_price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+            amount = execution_plan.get("adjusted_amount") or Decimal("0")
+            if amount <= 0 and fallback_price > 0:
+                amount = (effective_quote_to_use / fallback_price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
             order_number = f"dry-run-{int(time.time())}"
         else:
-            order = client.crear_orden_mercado_buy(best_signal["symbol"], quote_to_use, rule)
+            order = client.crear_orden_mercado_buy(best_signal["symbol"], effective_quote_to_use, rule)
             order_number = str(order["orderNumber"])
             status = client.obtener_estado_orden(order_number)
             fill = client.estimar_fill_desde_estado(status, fallback_price=fallback_price)
             amount = fill["amount"]
             fallback_price = fill["avg_price"] or fallback_price
+            if amount <= 0:
+                amount = execution_plan.get("adjusted_amount") or Decimal("0")
             if amount <= 0 and fallback_price > 0:
-                amount = (quote_to_use / fallback_price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+                amount = (effective_quote_to_use / fallback_price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
 
         trade_id = f"{telegram_id}-{order_number}"
-        position = self._build_new_position(usuario, rule, best_signal, order_number, fallback_price, amount, quote_to_use, trade_id)
+        position = self._build_new_position(usuario, rule, best_signal, order_number, fallback_price, amount, effective_quote_to_use, trade_id)
         self._persist_trade_state(telegram_id, position)
         TradeEventModel.registrar_evento(trade_id, telegram_id, "ENTRY_FILLED", {
             "symbol": best_signal["symbol"],
             "entry_price": float(fallback_price),
             "quantity": float(amount),
-            "quote_used": float(quote_to_use),
+            "quote_used": float(effective_quote_to_use),
         })
         UsuarioModel.incrementar_stats(telegram_id, {"opened": 1})
         OperacionModel.registrar_operacion(
@@ -490,7 +537,7 @@ class TradingEngine:
                 "dynamic_tp_activation_price": float(best_signal["dynamic_tp_activation_price"]),
                 "score": float(best_signal["score"]),
                 "quantity": float(amount),
-                "quote_amount": float(quote_to_use),
+                "quote_amount": float(effective_quote_to_use),
                 "order_number": order_number,
                 "opened_at": datetime.utcnow(),
                 "quote_asset": rule.quote_asset,
@@ -509,7 +556,7 @@ class TradingEngine:
             order_number,
             self._fmt(available_quote),
             rule.quote_asset,
-            self._fmt(quote_to_use),
+            self._fmt(effective_quote_to_use),
             rule.quote_asset,
             self._fmt(amount),
             rule.base_asset,
