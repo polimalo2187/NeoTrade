@@ -1,9 +1,10 @@
 import logging
 import threading
 import time
+from collections import Counter
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import requests
@@ -81,6 +82,37 @@ class TradingEngine:
         except Exception:
             return fallback_ms
 
+    @staticmethod
+    def _format_reason_counts(reason_counts: Dict[str, int]) -> str:
+        if not reason_counts:
+            return "none"
+        ordered = sorted(reason_counts.items(), key=lambda item: (-item[1], item[0]))
+        return ", ".join(f"{reason}:{count}" for reason, count in ordered)
+
+    @staticmethod
+    def _serialize_scan_detail(detail: Dict[str, Any]) -> str:
+        if not detail:
+            return "none"
+        parts = []
+        for key, value in list(detail.items())[:6]:
+            if isinstance(value, dict):
+                nested_parts = []
+                for nested_key, nested_value in list(value.items())[:4]:
+                    nested_parts.append(f"{nested_key}={nested_value}")
+                parts.append(f"{key}({'; '.join(nested_parts)})")
+            elif isinstance(value, list):
+                preview = ",".join(str(item) for item in value[:4])
+                parts.append(f"{key}=[{preview}]")
+            else:
+                parts.append(f"{key}={value}")
+        return "; ".join(parts) if parts else "none"
+
+    @staticmethod
+    def _format_scan_samples(samples: List[str], limit: int = 5) -> str:
+        if not samples:
+            return "none"
+        return " | ".join(samples[:limit])
+
     def __init__(self):
         self.strategy = MTFStrategy()
         self.notifier = TelegramNotifier(TELEGRAM_BOT_TOKEN)
@@ -104,7 +136,14 @@ class TradingEngine:
         self.running = True
         self._thread = threading.Thread(target=self._run, daemon=True, name="trading-engine")
         self._thread.start()
-        logger.info("Motor de trading iniciado.")
+        logger.info(
+            "Motor de trading iniciado. | dry_run=%s | scan_interval=%ss | quote_asset=%s | min_usdt_order=%s | max_symbols=%s",
+            DRY_RUN,
+            SCAN_INTERVAL_SECONDS,
+            QUOTE_ASSET,
+            MIN_USDT_ORDER,
+            MAX_SYMBOLS_TO_SCAN,
+        )
 
     def stop(self):
         self.running = False
@@ -123,9 +162,16 @@ class TradingEngine:
     def _cycle(self):
         usuarios = UsuarioModel.obtener_usuarios_para_engine()
         if not usuarios:
+            logger.info("ENGINE_CYCLE_IDLE | motivo=no_active_users")
             return
 
         candidate_symbols = self._get_candidate_symbols()
+        logger.info(
+            "ENGINE_CYCLE_START | usuarios=%s | symbols=%s | dry_run=%s",
+            len(usuarios),
+            len(candidate_symbols),
+            DRY_RUN,
+        )
         for usuario in usuarios:
             telegram_id = usuario["telegram_id"]
             try:
@@ -133,10 +179,23 @@ class TradingEngine:
                 self._refresh_user_capital_snapshot(usuario, client)
                 active_position = usuario.get("active_position")
                 if active_position:
+                    logger.info(
+                        "ENGINE_USER_MANAGE | telegram_id=%s | symbol=%s | trade_id=%s",
+                        telegram_id,
+                        active_position.get("symbol"),
+                        active_position.get("trade_id") or active_position.get("order_number"),
+                    )
                     self._manage_open_position(usuario, client)
                 else:
                     existing_invoice = self.fee_manager.ensure_invoice_if_threshold_reached(telegram_id)
                     if existing_invoice:
+                        logger.warning(
+                            "SCAN_SKIPPED_FEE_LOCK | telegram_id=%s | invoice_id=%s | amount=%s %s",
+                            telegram_id,
+                            existing_invoice.get("invoice_id"),
+                            self._fmt(existing_invoice.get("invoice_amount"), 2),
+                            existing_invoice.get("asset") or QUOTE_ASSET,
+                        )
                         continue
                     self._scan_and_open_trade(usuario, client, candidate_symbols)
                 UsuarioModel.actualizar_engine_error(telegram_id, None)
@@ -170,29 +229,100 @@ class TradingEngine:
         self._symbol_rules = self._public_client.obtener_info_instrumentos()
         self._cached_symbols = [symbol for symbol in symbols if symbol in self._symbol_rules]
         self._last_symbols_refresh = now
+        logger.info(
+            "SYMBOLS_REFRESH | requested=%s | available_with_rules=%s | symbols=%s",
+            len(symbols),
+            len(self._cached_symbols),
+            self._cached_symbols,
+        )
         return self._cached_symbols
 
     def _scan_and_open_trade(self, usuario: Dict, client: ExchangeClient, symbols: List[str]) -> None:
         telegram_id = usuario["telegram_id"]
         available_quote = client.obtener_balance_disponible(QUOTE_ASSET)
+        logger.info(
+            "SCAN_START | telegram_id=%s | usuario=%s | symbols=%s | balance_disponible=%s %s | min_usdt_order=%s | capital_activo_porc=%s",
+            telegram_id,
+            self._user_name(usuario),
+            len(symbols),
+            self._fmt(available_quote),
+            QUOTE_ASSET,
+            self._fmt(MIN_USDT_ORDER, 2),
+            CAPITAL_ACTIVO_PORC,
+        )
         if available_quote < Decimal(str(MIN_USDT_ORDER)):
+            logger.warning(
+                "SCAN_SKIPPED_LOW_BALANCE | telegram_id=%s | balance_disponible=%s %s | min_usdt_order=%s",
+                telegram_id,
+                self._fmt(available_quote),
+                QUOTE_ASSET,
+                self._fmt(MIN_USDT_ORDER, 2),
+            )
             return
 
         best_signal = None
+        accepted_signals = 0
+        reason_counts: Counter = Counter()
+        samples: List[str] = []
         for symbol in symbols:
-            signal = self._evaluate_symbol(symbol)
-            if not signal:
+            evaluation = self._evaluate_symbol(symbol)
+            if not evaluation.get("accepted"):
+                reason = evaluation.get("reason") or "UNKNOWN"
+                reason_counts[reason] += 1
+                if len(samples) < 5:
+                    samples.append(
+                        f"{symbol}:{reason}[{self._serialize_scan_detail(evaluation.get('detail') or {})}]"
+                    )
                 continue
+
+            signal = evaluation["signal"]
+            accepted_signals += 1
+            if len(samples) < 5:
+                samples.append(
+                    f"{symbol}:OK[score={signal.get('score')}; entry={signal.get('entry_price')}]"
+                )
             if not best_signal or signal["score"] > best_signal["score"]:
                 best_signal = signal
 
         if not best_signal:
+            logger.info(
+                "SCAN_RESULT_NO_ENTRY | telegram_id=%s | usuario=%s | symbols=%s | accepted_signals=%s | rejection_summary=%s | samples=%s",
+                telegram_id,
+                self._user_name(usuario),
+                len(symbols),
+                accepted_signals,
+                self._format_reason_counts(dict(reason_counts)),
+                self._format_scan_samples(samples),
+            )
             return
+
+        logger.info(
+            "SCAN_RESULT_CANDIDATE | telegram_id=%s | usuario=%s | symbols=%s | accepted_signals=%s | best_symbol=%s | best_score=%s | best_entry=%s | rejection_summary=%s | samples=%s",
+            telegram_id,
+            self._user_name(usuario),
+            len(symbols),
+            accepted_signals,
+            best_signal["symbol"],
+            self._fmt(best_signal["score"], 2),
+            self._fmt(best_signal["entry_price"]),
+            self._format_reason_counts(dict(reason_counts)),
+            self._format_scan_samples(samples),
+        )
 
         rule = self._symbol_rules[best_signal["symbol"]]
         quote_to_use = (available_quote * Decimal(str(CAPITAL_ACTIVO_PORC))).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
         min_required = max(rule.min_buy_amount, Decimal(str(MIN_USDT_ORDER)))
         if quote_to_use < min_required:
+            logger.warning(
+                "SCAN_BLOCKED_MIN_NOTIONAL | telegram_id=%s | symbol=%s | quote_to_use=%s %s | min_required=%s %s | exchange_min_buy_amount=%s",
+                telegram_id,
+                best_signal["symbol"],
+                self._fmt(quote_to_use),
+                rule.quote_asset,
+                self._fmt(min_required),
+                rule.quote_asset,
+                self._fmt(rule.min_buy_amount),
+            )
             return
 
         fallback_price = Decimal(str(best_signal["entry_price"]))
@@ -471,6 +601,16 @@ class TradingEngine:
             )
 
         current_price = float(client.obtener_precio_actual(symbol))
+        logger.info(
+            "MANAGER_TICK | telegram_id=%s | trade_id=%s | symbol=%s | current_price=%s | effective_stop=%s | dynamic_tp_active=%s | high_seen=%s",
+            telegram_id,
+            trade_id,
+            symbol,
+            self._fmt(current_price),
+            self._fmt(state.get("effective_stop_loss")),
+            bool(state.get("dynamic_tp_active")),
+            self._fmt(state.get("highest_price_seen")),
+        )
         live_result = self.strategy.process_live_price(state, current_price)
         state.update(live_result["updates"])
         if live_result["events"]:
@@ -660,16 +800,20 @@ class TradingEngine:
             state.get("symbol"),
         )
 
-    def _evaluate_symbol(self, symbol: str) -> Optional[Dict]:
+    def _evaluate_symbol(self, symbol: str) -> Dict[str, Any]:
         try:
             df_trend = self._public_client.obtener_klines(symbol, TREND_PERIOD_SECONDS, limit=CANDLE_LIMIT)
             df_pullback = self._public_client.obtener_klines(symbol, PULLBACK_PERIOD_SECONDS, limit=CANDLE_LIMIT)
             df_entry = self._public_client.obtener_klines(symbol, ENTRY_PERIOD_SECONDS, limit=CANDLE_LIMIT)
-            signal = self.strategy.analizar(df_trend, df_pullback, df_entry)
-            if not signal:
-                return None
-            signal["symbol"] = symbol
-            return signal
+            diagnostic = self.strategy.analizar_detallado(df_trend, df_pullback, df_entry)
+            if diagnostic.get("signal"):
+                diagnostic["signal"]["symbol"] = symbol
+            return diagnostic
         except Exception as exc:
-            logger.debug("No hubo señal en %s: %s", symbol, exc)
-            return None
+            logger.warning("SCAN_SYMBOL_ERROR | symbol=%s | error=%s", symbol, exc)
+            return {
+                "accepted": False,
+                "reason": "DATA_OR_EVAL_ERROR",
+                "detail": {"error": str(exc)},
+                "signal": None,
+            }
