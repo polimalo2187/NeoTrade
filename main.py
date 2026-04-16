@@ -1,7 +1,7 @@
 import logging
 
-from app.config import LOG_LEVEL
-from app.runtime import AppRuntime
+from app.config import APP_SERVICE, LOG_LEVEL
+from app.runtime import ServiceConfigurationError, ServiceRuntimeFactory
 
 
 def configure_logging():
@@ -13,9 +13,14 @@ def configure_logging():
 
 def main():
     configure_logging()
-    runtime = AppRuntime()
+    logging.getLogger(__name__).info("Boot service requested | APP_SERVICE=%s", APP_SERVICE or "<unset>")
+    runtime = ServiceRuntimeFactory.create()
     runtime.start()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ServiceConfigurationError as exc:
+        logging.getLogger(__name__).error("Configuración de servicio inválida: %s", exc)
+        raise SystemExit(2) from exc
