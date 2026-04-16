@@ -1,10 +1,7 @@
 import logging
 
-from app.bot import Bot as TradingBot
 from app.config import LOG_LEVEL
-from app.models import ensure_indexes
-from app.scheduler import Scheduler
-from app.trading_engine import TradingEngine
+from app.runtime import AppRuntime
 
 
 def configure_logging():
@@ -16,16 +13,8 @@ def configure_logging():
 
 def main():
     configure_logging()
-    ensure_indexes()
-
-    scheduler = Scheduler()
-    scheduler.start()
-
-    engine = TradingEngine()
-    engine.start()
-
-    bot = TradingBot()
-    bot.start_bot()
+    runtime = AppRuntime()
+    runtime.start()
 
 
 if __name__ == "__main__":
