@@ -1,1 +1,226 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>NeoTrade Mini App</title>
+    <meta name="theme-color" content="#0b0f14" />
+    <link rel="icon" type="image/svg+xml" href="/assets/logo-mark.svg" />
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  </head>
+  <body>
+    <div id="app" class="shell shell--loading">
+      <header class="topbar surface">
+        <div class="brand">
+          <div class="brand__mark">
+            <img src="/assets/logo-mark.svg" alt="NeoTrade" />
+          </div>
+          <div>
+            <div class="eyebrow">Trading automático</div>
+            <h1>NeoTrade</h1>
+          </div>
+        </div>
+        <div class="topbar__meta">
+          <span id="connectionBadge" class="badge badge--neutral">Inicializando</span>
+          <button id="refreshButton" class="icon-button" type="button" title="Actualizar dashboard">
+            ⟳
+          </button>
+        </div>
+      </header>
 
+      <main class="layout">
+        <section class="hero surface">
+          <div>
+            <p class="eyebrow">Mini App V1</p>
+            <h2>Panel operativo serio, sobrio y centrado en control.</h2>
+            <p class="hero__subtitle">
+              Gestiona activación, capital, fee, referidos y credenciales CoinW desde una interfaz
+              oscura y profesional, sin depender de botones complejos en Telegram.
+            </p>
+          </div>
+          <div class="hero__status">
+            <div class="metric-card metric-card--hero">
+              <span class="metric-card__label">Bot</span>
+              <strong id="metricBotStatus">--</strong>
+              <small id="metricBotDetail">Esperando autenticación</small>
+            </div>
+            <div class="metric-card metric-card--hero">
+              <span class="metric-card__label">Capital activo</span>
+              <strong id="metricCapitalActivo">--</strong>
+              <small id="metricCapitalTotal">Capital total --</small>
+            </div>
+          </div>
+        </section>
+
+        <section id="previewBanner" class="notice notice--warning hidden">
+          <strong>Modo vista previa.</strong>
+          <span>
+            Esta pantalla se abrió fuera de Telegram. La autenticación real y los datos del usuario solo
+            funcionan dentro de la Mini App.
+          </span>
+        </section>
+
+        <section id="globalError" class="notice notice--danger hidden"></section>
+        <section id="globalSuccess" class="notice notice--success hidden"></section>
+
+        <section class="metrics-grid">
+          <article class="metric-card surface">
+            <span class="metric-card__label">Capital total</span>
+            <strong id="metricCapitalTotalCard">--</strong>
+            <small>Total estimado en cuenta Spot</small>
+          </article>
+          <article class="metric-card surface">
+            <span class="metric-card__label">Fee pendiente</span>
+            <strong id="metricFeeDue">--</strong>
+            <small id="metricFeeStatus">Sin factura activa</small>
+          </article>
+          <article class="metric-card surface">
+            <span class="metric-card__label">Referidos activos</span>
+            <strong id="metricReferralsCount">--</strong>
+            <small id="metricReferralCode">Código --</small>
+          </article>
+          <article class="metric-card surface">
+            <span class="metric-card__label">Credenciales CoinW</span>
+            <strong id="metricCredentials">--</strong>
+            <small id="metricMaskedKey">Clave no cargada</small>
+          </article>
+        </section>
+
+        <section class="actions-grid">
+          <article class="surface panel">
+            <div class="panel__header">
+              <div>
+                <p class="eyebrow">Operativa</p>
+                <h3>Control del bot</h3>
+              </div>
+            </div>
+            <div class="button-row">
+              <button id="activateButton" class="button button--primary" type="button">Activar bot</button>
+              <button id="deactivateButton" class="button button--secondary" type="button">Desactivar bot</button>
+              <button id="refreshCapitalButton" class="button button--ghost" type="button">Refrescar capital</button>
+            </div>
+            <div class="status-list">
+              <div>
+                <span>Estado de trading</span>
+                <strong id="detailTradingStatus">--</strong>
+              </div>
+              <div>
+                <span>Bloqueo</span>
+                <strong id="detailTradingPause">--</strong>
+              </div>
+              <div>
+                <span>Último error engine</span>
+                <strong id="detailEngineError">--</strong>
+              </div>
+            </div>
+          </article>
+
+          <article class="surface panel">
+            <div class="panel__header">
+              <div>
+                <p class="eyebrow">CoinW</p>
+                <h3>Credenciales API</h3>
+              </div>
+            </div>
+            <form id="credentialsForm" class="form-stack">
+              <label>
+                <span>API Key</span>
+                <input id="apiKeyInput" name="apiKey" type="text" autocomplete="off" placeholder="Pega aquí tu API Key" />
+              </label>
+              <label>
+                <span>API Secret</span>
+                <input id="apiSecretInput" name="apiSecret" type="password" autocomplete="off" placeholder="Pega aquí tu API Secret" />
+              </label>
+              <button id="saveCredentialsButton" class="button button--primary" type="submit">Guardar credenciales</button>
+            </form>
+            <p class="helper-text">Las credenciales se validan contra CoinW antes de guardarse.</p>
+          </article>
+
+          <article class="surface panel">
+            <div class="panel__header">
+              <div>
+                <p class="eyebrow">Fees</p>
+                <h3>Reporte de pago</h3>
+              </div>
+            </div>
+            <div id="feeInvoiceBlock" class="invoice-card invoice-card--empty">
+              Sin factura pendiente.
+            </div>
+            <form id="feeReportForm" class="form-stack">
+              <label>
+                <span>Detalle del reporte</span>
+                <textarea id="feeReportInput" name="feeReport" rows="4" placeholder="Ejemplo: transferido 5 USDT, txid..., hora..., referencia..."></textarea>
+              </label>
+              <button id="sendFeeReportButton" class="button button--secondary" type="submit">Enviar reporte</button>
+            </form>
+            <p id="feeMessage" class="helper-text">Aquí aparecerán las instrucciones de fee cuando exista una factura activa.</p>
+          </article>
+        </section>
+
+        <section class="split-layout">
+          <article class="surface panel panel--full">
+            <div class="panel__header panel__header--with-tabs">
+              <div>
+                <p class="eyebrow">Actividad</p>
+                <h3>Historial reciente</h3>
+              </div>
+              <div class="tab-row" role="tablist" aria-label="Actividad reciente">
+                <button class="tab is-active" data-tab="operations" type="button">Operaciones</button>
+                <button class="tab" data-tab="states" type="button">Estados</button>
+                <button class="tab" data-tab="events" type="button">Eventos</button>
+              </div>
+            </div>
+            <div id="operationsPanel" class="list-panel"></div>
+            <div id="statesPanel" class="list-panel hidden"></div>
+            <div id="eventsPanel" class="list-panel hidden"></div>
+          </article>
+
+          <article class="surface panel panel--sidebar">
+            <div class="panel__header">
+              <div>
+                <p class="eyebrow">Cuenta</p>
+                <h3>Referidos y salud</h3>
+              </div>
+            </div>
+            <div class="status-list status-list--spaced">
+              <div>
+                <span>Ganancia diaria</span>
+                <strong id="detailReferralDaily">--</strong>
+              </div>
+              <div>
+                <span>Ganancia acumulada</span>
+                <strong id="detailReferralTotal">--</strong>
+              </div>
+              <div>
+                <span>Posición activa</span>
+                <strong id="detailActivePosition">--</strong>
+              </div>
+              <div>
+                <span>Última actualización</span>
+                <strong id="detailUpdatedAt">--</strong>
+              </div>
+            </div>
+            <div class="divider"></div>
+            <div class="profile-card">
+              <div>
+                <p class="eyebrow">Sesión</p>
+                <h3 id="profileName">No autenticado</h3>
+                <p id="profileMeta">Abre la Mini App desde Telegram para cargar tu cuenta.</p>
+              </div>
+            </div>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <template id="listEmptyTemplate">
+      <div class="empty-state">
+        <strong>Sin datos todavía</strong>
+        <p>No hay información reciente para mostrar en este bloque.</p>
+      </div>
+    </template>
+
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>
