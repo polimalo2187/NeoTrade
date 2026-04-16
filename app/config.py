@@ -16,6 +16,14 @@ def _env_int(name: str, default: int) -> int:
     return int(value)
 
 
+def _env_int_first(names: List[str], default: int) -> int:
+    for name in names:
+        value = os.getenv(name)
+        if value is not None and value != "":
+            return int(value)
+    return default
+
+
 def _env_float(name: str, default: float) -> float:
     value = os.getenv(name)
     if value is None or value == "":
@@ -33,6 +41,7 @@ def _env_list(name: str) -> List[str]:
 # =========================
 # Infraestructura
 # =========================
+APP_SERVICE = os.getenv("APP_SERVICE", "").strip().lower()
 MONGODB_URI = os.getenv("MONGODB_URI")
 MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -41,7 +50,7 @@ ENABLE_TELEGRAM_BOT = _env_bool("ENABLE_TELEGRAM_BOT", True)
 ENABLE_API_SERVER = _env_bool("ENABLE_API_SERVER", True)
 MINI_APP_URL = os.getenv("MINI_APP_URL", "").strip()
 API_HOST = os.getenv("API_HOST", "0.0.0.0").strip()
-API_PORT = _env_int("API_PORT", 8000)
+API_PORT = _env_int_first(["API_PORT", "PORT"], 8000)
 API_PREFIX = os.getenv("API_PREFIX", "/api/v1").strip() or "/api/v1"
 TELEGRAM_INIT_DATA_MAX_AGE_SECONDS = _env_int("TELEGRAM_INIT_DATA_MAX_AGE_SECONDS", 3600)
 MINI_APP_SESSION_TTL_SECONDS = _env_int("MINI_APP_SESSION_TTL_SECONDS", 43200)
