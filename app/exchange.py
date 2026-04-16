@@ -829,6 +829,109 @@ class ExchangeClient:
             "quote_capped": quote_capped,
         }
 
+    def evaluar_venta_mercado(self, symbol: str, amount: Decimal, rule: InstrumentRule, reference_price: Decimal) -> Dict[str, Any]:
+        requested_amount = self._to_decimal(amount).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+        reference_price = self._to_decimal(reference_price)
+        adjusted_amount = self._quantize(requested_amount, rule.count_precision)
+        estimated_quote = (adjusted_amount * reference_price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN) if reference_price > 0 else Decimal("0")
+        min_quote_required = max(rule.min_buy_amount, Decimal("0"))
+
+        reason = None
+        if requested_amount <= 0:
+            reason = "NO_AMOUNT_TO_USE"
+        elif reference_price <= 0:
+            reason = "INVALID_REFERENCE_PRICE"
+        elif adjusted_amount <= 0:
+            reason = "ADJUSTED_AMOUNT_ZERO"
+        elif rule.min_buy_count > 0 and adjusted_amount < rule.min_buy_count:
+            reason = "BELOW_MIN_SELL_COUNT"
+        elif min_quote_required > 0 and estimated_quote < min_quote_required:
+            reason = "BELOW_MIN_SELL_AMOUNT"
+
+        return {
+            "symbol": symbol.upper(),
+            "executable": reason is None,
+            "reason": reason or "OK",
+            "requested_amount": requested_amount,
+            "adjusted_amount": adjusted_amount,
+            "reference_price": reference_price,
+            "estimated_quote": estimated_quote,
+            "min_quote_required": min_quote_required,
+        }
+
+    def evaluar_venta_parcial_mercado(
+        self,
+        symbol: str,
+        total_amount: Decimal,
+        fraction: Decimal,
+        rule: InstrumentRule,
+        reference_price: Decimal,
+    ) -> Dict[str, Any]:
+        total_amount = self._to_decimal(total_amount).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+        fraction = self._to_decimal(fraction)
+        reference_price = self._to_decimal(reference_price)
+
+        if total_amount <= 0:
+            return {
+                "symbol": symbol.upper(),
+                "executable": False,
+                "reason": "NO_AMOUNT_TO_USE",
+                "requested_total_amount": total_amount,
+                "requested_partial_amount": Decimal("0"),
+                "adjusted_partial_amount": Decimal("0"),
+                "remaining_amount": Decimal("0"),
+                "reference_price": reference_price,
+                "partial_estimated_quote": Decimal("0"),
+                "remaining_estimated_quote": Decimal("0"),
+                "min_quote_required": max(rule.min_buy_amount, Decimal("0")),
+            }
+
+        if fraction <= 0 or fraction >= 1:
+            return {
+                "symbol": symbol.upper(),
+                "executable": False,
+                "reason": "INVALID_PARTIAL_FRACTION",
+                "requested_total_amount": total_amount,
+                "requested_partial_amount": Decimal("0"),
+                "adjusted_partial_amount": Decimal("0"),
+                "remaining_amount": total_amount,
+                "reference_price": reference_price,
+                "partial_estimated_quote": Decimal("0"),
+                "remaining_estimated_quote": (total_amount * reference_price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN) if reference_price > 0 else Decimal("0"),
+                "min_quote_required": max(rule.min_buy_amount, Decimal("0")),
+            }
+
+        requested_partial_amount = (total_amount * fraction).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+        partial_plan = self.evaluar_venta_mercado(symbol, requested_partial_amount, rule, reference_price)
+        adjusted_partial_amount = partial_plan.get("adjusted_amount", Decimal("0"))
+        remaining_amount = self._quantize(max(total_amount - adjusted_partial_amount, Decimal("0")), rule.count_precision)
+        min_quote_required = max(rule.min_buy_amount, Decimal("0"))
+        remaining_estimated_quote = (remaining_amount * reference_price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN) if reference_price > 0 else Decimal("0")
+
+        reason = None
+        if not partial_plan.get("executable"):
+            reason = partial_plan.get("reason") or "PARTIAL_NOT_EXECUTABLE"
+        elif remaining_amount <= 0:
+            reason = "REMAINDER_ZERO"
+        elif rule.min_buy_count > 0 and remaining_amount < rule.min_buy_count:
+            reason = "REMAINDER_BELOW_MIN_SELL_COUNT"
+        elif min_quote_required > 0 and remaining_estimated_quote < min_quote_required:
+            reason = "REMAINDER_BELOW_MIN_SELL_AMOUNT"
+
+        return {
+            "symbol": symbol.upper(),
+            "executable": reason is None,
+            "reason": reason or "OK",
+            "requested_total_amount": total_amount,
+            "requested_partial_amount": requested_partial_amount,
+            "adjusted_partial_amount": adjusted_partial_amount,
+            "remaining_amount": remaining_amount,
+            "reference_price": reference_price,
+            "partial_estimated_quote": partial_plan.get("estimated_quote", Decimal("0")),
+            "remaining_estimated_quote": remaining_estimated_quote,
+            "min_quote_required": min_quote_required,
+        }
+
     def crear_orden_mercado_buy(self, symbol: str, funds: Decimal, rule: InstrumentRule) -> Dict[str, Any]:
         funds = self.ajustar_funds(funds, rule)
         return self._private_request(
