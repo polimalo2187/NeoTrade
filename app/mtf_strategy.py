@@ -26,6 +26,8 @@ from app.config import (
     RSI_TREND_MIN,
     STOP_LOSS_PORC,
     TRAIL_STOP_ATR_MULTIPLIER,
+    TP1_PARTIAL_FRACTION,
+    TP1_PARTIAL_MIN_QUOTE,
     TREND_EMA_FAST_SLOPE_MIN,
     TREND_EMA_SLOW_SLOPE_MIN,
     WEAKNESS_CONFIRMATIONS_REQUIRED,
@@ -462,6 +464,8 @@ class MTFStrategy:
                 "break_even_offset_r": BREAK_EVEN_OFFSET_R,
                 "trail_stop_atr_multiplier": TRAIL_STOP_ATR_MULTIPLIER,
                 "weakness_rsi_delta": WEAKNESS_RSI_DELTA,
+                "tp1_partial_min_quote": TP1_PARTIAL_MIN_QUOTE,
+                "tp1_partial_fraction": TP1_PARTIAL_FRACTION,
             },
         }
         return {
