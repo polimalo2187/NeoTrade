@@ -1,11 +1,13 @@
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from bson import ObjectId
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.config import API_PREFIX, ADMIN_TELEGRAM_IDS, ENABLE_API_SERVER, MINI_APP_URL
@@ -22,6 +24,9 @@ from .security import (
 
 logger = logging.getLogger(__name__)
 service = UserTradingService()
+WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+WEB_ASSETS_DIR = WEB_DIR / "assets"
+WEB_INDEX_FILE = WEB_DIR / "index.html"
 
 
 def _json(data: Any, status_code: int = 200) -> JSONResponse:
@@ -64,6 +69,14 @@ class AppInfoResponse(BaseModel):
     admin_ids_configured: int
 
 
+class RootResponse(BaseModel):
+    service: str
+    status: str
+    docs: str
+    api_prefix: str
+    mini_app_url: str
+
+
 def _extract_bearer_token(authorization: Optional[str]) -> str:
     if not authorization:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Falta encabezado Authorization")
@@ -88,6 +101,16 @@ def get_admin_user(current_user: AuthenticatedUser = Depends(get_current_user)) 
     return current_user
 
 
+def _web_index_response() -> FileResponse:
+    if not WEB_INDEX_FILE.exists():
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="No se encontró index.html de Mini App")
+    return FileResponse(
+        WEB_INDEX_FILE,
+        media_type="text/html",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 def create_api_app() -> FastAPI:
     app = FastAPI(
         title="NeoTrade Mini App API",
@@ -96,20 +119,35 @@ def create_api_app() -> FastAPI:
         redoc_url="/redoc",
     )
 
-    @app.get("/")
+    if WEB_ASSETS_DIR.exists():
+        app.mount("/assets", StaticFiles(directory=str(WEB_ASSETS_DIR)), name="assets")
+    else:
+        logger.warning("No se encontró directorio de assets web: %s", WEB_ASSETS_DIR)
+
+    @app.get("/", include_in_schema=False)
     def root():
-        return _json(
-            {
-                "service": "NeoTrade Mini App API",
-                "status": "ok",
-                "docs": "/docs",
-                "api_prefix": API_PREFIX,
-            }
-        )
+        return _web_index_response()
+
+    @app.get("/app", include_in_schema=False)
+    def mini_app_shell():
+        return _web_index_response()
 
     @app.get("/favicon.ico", include_in_schema=False)
     def favicon():
+        icon_path = WEB_ASSETS_DIR / "logo-mark.svg"
+        if icon_path.exists():
+            return FileResponse(icon_path, media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=3600"})
         return Response(status_code=204)
+
+    @app.get(f"{API_PREFIX}/root", response_model=RootResponse)
+    def root_info():
+        return RootResponse(
+            service="NeoTrade Mini App API",
+            status="ok",
+            docs="/docs",
+            api_prefix=API_PREFIX,
+            mini_app_url=MINI_APP_URL,
+        )
 
     @app.get(f"{API_PREFIX}/health")
     def health():
