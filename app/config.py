@@ -37,6 +37,8 @@ MONGODB_URI = os.getenv("MONGODB_URI")
 MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+ENABLE_TELEGRAM_BOT = _env_bool("ENABLE_TELEGRAM_BOT", True)
+MINI_APP_URL = os.getenv("MINI_APP_URL", "").strip()
 
 # =========================
 # CoinW / Trading
