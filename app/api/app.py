@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 from bson import ObjectId
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from app.config import API_PREFIX, ADMIN_TELEGRAM_IDS, ENABLE_API_SERVER, MINI_APP_URL
@@ -106,6 +106,10 @@ def create_api_app() -> FastAPI:
                 "api_prefix": API_PREFIX,
             }
         )
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon():
+        return Response(status_code=204)
 
     @app.get(f"{API_PREFIX}/health")
     def health():
