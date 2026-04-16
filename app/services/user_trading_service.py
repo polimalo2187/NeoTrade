@@ -2,10 +2,10 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from app.config import CAPITAL_ACTIVO_PORC, QUOTE_ASSET
+from app.config import CAPITAL_ACTIVO_PORC, PAYMENT_ASSET, QUOTE_ASSET
 from app.exchange import CoinWApiError, CoinWEmptySpotBalanceError, ExchangeClient
 from app.fee_manager import FeeManager
-from app.models import OperacionModel, UsuarioModel
+from app.models import OperacionModel, ReferidoModel, TradeEventModel, TradeStateModel, UsuarioModel
 from app.usuario import Usuario
 
 
@@ -42,6 +42,13 @@ class StatefulMessageResult:
     reason: Optional[str] = None
 
 
+@dataclass
+class ApiCredentialUpdateResult:
+    status: str
+    user: Optional[Dict[str, Any]] = None
+    reason: Optional[str] = None
+
+
 class UserTradingService:
     def __init__(self, fee_manager: Optional[FeeManager] = None):
         self.fee_manager = fee_manager or FeeManager()
@@ -58,6 +65,15 @@ class UserTradingService:
     @staticmethod
     def format_decimal(value: float) -> str:
         return f"{float(value):.8f}"
+
+    @staticmethod
+    def mask_api_key(value: Optional[str]) -> Optional[str]:
+        if not value:
+            return None
+        value = str(value)
+        if len(value) <= 8:
+            return "*" * len(value)
+        return f"{value[:4]}...{value[-4:]}"
 
     def get_or_create_user(self, telegram_id: int, first_name: Optional[str]) -> StartSessionResult:
         nombre_usuario = first_name or "usuario"
@@ -90,6 +106,10 @@ class UserTradingService:
 
     def get_fee_invoice(self, telegram_id: int) -> Optional[Dict[str, Any]]:
         return self.fee_manager.obtener_factura_usuario(telegram_id)
+
+    def ensure_web_session_user(self, telegram_id: int, first_name: Optional[str]) -> Dict[str, Any]:
+        session = self.get_or_create_user(telegram_id, first_name)
+        return session.user
 
     def activate_bot(self, telegram_id: int) -> BotActivationResult:
         usuario = self.get_user(telegram_id)
@@ -171,6 +191,12 @@ class UserTradingService:
     def get_recent_operations(self, telegram_id: int, limit: int = 10):
         return OperacionModel.obtener_operaciones({"telegram_id": telegram_id}, limit=limit)
 
+    def get_recent_trade_states(self, telegram_id: int, limit: int = 10):
+        return TradeStateModel.obtener_estados({"telegram_id": telegram_id}, limit=limit)
+
+    def get_recent_trade_events(self, telegram_id: int, limit: int = 20):
+        return TradeEventModel.obtener_eventos({"telegram_id": telegram_id}, limit=limit)
+
     def begin_api_key_capture(self, telegram_id: int) -> None:
         UsuarioModel.actualizar_usuario({"telegram_id": telegram_id}, {"estado": "esperando_api_key"})
 
@@ -180,6 +206,67 @@ class UserTradingService:
             return None
         UsuarioModel.actualizar_usuario({"telegram_id": telegram_id}, {"estado": "esperando_reporte_fee"})
         return invoice
+
+    def set_api_credentials(self, telegram_id: int, api_key: str, api_secret: str) -> ApiCredentialUpdateResult:
+        usuario = self.get_user(telegram_id)
+        if not usuario:
+            return ApiCredentialUpdateResult(status="user_not_found")
+
+        normalized_key = self.normalize_api_credential(api_key)
+        normalized_secret = self.normalize_api_credential(api_secret)
+        if not normalized_key or not normalized_secret:
+            return ApiCredentialUpdateResult(status="missing_credentials", user=usuario, reason="API Key y API Secret son obligatorios")
+
+        exito, error_msg = Usuario.validar_api(normalized_key, normalized_secret, return_error=True)
+        if not exito:
+            return ApiCredentialUpdateResult(status="api_invalid", user=usuario, reason=error_msg)
+
+        UsuarioModel.actualizar_usuario(
+            {"telegram_id": telegram_id},
+            {
+                "api_key": normalized_key,
+                "api_secret": normalized_secret,
+                "estado": None,
+                "api_key_temp": None,
+            },
+        )
+        usuario_actualizado = self.get_user(telegram_id) or usuario
+        return ApiCredentialUpdateResult(status="api_validated", user=usuario_actualizado)
+
+    def get_referral_summary(self, telegram_id: int) -> Dict[str, Any]:
+        usuario = self.get_user(telegram_id) or {}
+        referidos = ReferidoModel.obtener_referidos({"referidor_id": telegram_id})
+        return {
+            "codigo_referido": usuario.get("codigo_referido") or str(telegram_id),
+            "ganancia_diaria": float(usuario.get("ganancia_diaria_referidos", 0) or 0),
+            "ganancia_acumulada": float(usuario.get("ganancia_acumulada_referidos", 0) or 0),
+            "referidos_activos": len(referidos),
+            "referidos": referidos,
+        }
+
+    def get_dashboard_snapshot(
+        self,
+        telegram_id: int,
+        operations_limit: int = 10,
+        events_limit: int = 10,
+        refresh_capital: bool = False,
+    ) -> Dict[str, Any]:
+        capital_result = self.refresh_capital(telegram_id) if refresh_capital else CapitalSnapshotResult(
+            status="snapshot",
+            user=self.get_user(telegram_id),
+            reason=None,
+        )
+        usuario = capital_result.user or self.get_user(telegram_id) or {}
+        return {
+            "user": self.serialize_user_public(usuario),
+            "capital_status": capital_result.status,
+            "capital_reason": capital_result.reason,
+            "fee_invoice": self.get_fee_invoice(telegram_id),
+            "recent_operations": self.get_recent_operations(telegram_id, limit=operations_limit),
+            "recent_trade_states": self.get_recent_trade_states(telegram_id, limit=operations_limit),
+            "recent_trade_events": self.get_recent_trade_events(telegram_id, limit=events_limit),
+            "referrals": self.get_referral_summary(telegram_id),
+        }
 
     def process_stateful_message(self, telegram_id: int, text: str) -> StatefulMessageResult:
         usuario = self.get_user(telegram_id)
@@ -227,3 +314,29 @@ class UserTradingService:
             return StatefulMessageResult(status="fee_reported", invoice=invoice)
 
         return StatefulMessageResult(status="ignored")
+
+    def serialize_user_public(self, usuario: Dict[str, Any]) -> Dict[str, Any]:
+        if not usuario:
+            return {}
+        return {
+            "telegram_id": usuario.get("telegram_id"),
+            "nombre": usuario.get("nombre"),
+            "codigo_referido": usuario.get("codigo_referido"),
+            "bot_activo": bool(usuario.get("bot_activo")),
+            "trading_enabled": bool(usuario.get("trading_enabled", True)),
+            "trading_pause_reason": usuario.get("trading_pause_reason"),
+            "fee_status": usuario.get("fee_status", "clear"),
+            "fee_due_total": float(usuario.get("fee_due_total", 0) or 0),
+            "fee_paid_total": float(usuario.get("fee_paid_total", 0) or 0),
+            "fee_threshold": float(usuario.get("fee_threshold", 0) or 0),
+            "payment_asset": usuario.get("payment_asset") or PAYMENT_ASSET,
+            "capital_total": float(usuario.get("capital_total", 0) or 0),
+            "capital_activo": float(usuario.get("capital_activo", 0) or 0),
+            "active_position": usuario.get("active_position"),
+            "last_engine_error": usuario.get("last_engine_error"),
+            "stats": usuario.get("stats") or {},
+            "has_api_credentials": bool(usuario.get("api_key") and usuario.get("api_secret")),
+            "api_key_masked": self.mask_api_key(usuario.get("api_key")),
+            "updated_at": usuario.get("updated_at"),
+            "created_at": usuario.get("created_at"),
+        }
