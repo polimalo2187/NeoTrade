@@ -27,6 +27,8 @@ from app.config import (
     SCAN_INTERVAL_SECONDS,
     SYMBOL_REFRESH_SECONDS,
     TELEGRAM_BOT_TOKEN,
+    TP1_PARTIAL_FRACTION,
+    TP1_PARTIAL_MIN_QUOTE,
     TREND_PERIOD_SECONDS,
 )
 from app.exchange import CoinWApiError, ExchangeClient
@@ -378,6 +380,19 @@ class TradingEngine:
         }
         return self._serialize_scan_detail(detail)
 
+    def _serialize_partial_sell_plan(self, plan: Dict[str, Any]) -> str:
+        detail = {
+            "requested_total_amount": self._fmt(plan.get("requested_total_amount")),
+            "requested_partial_amount": self._fmt(plan.get("requested_partial_amount")),
+            "adjusted_partial_amount": self._fmt(plan.get("adjusted_partial_amount")),
+            "remaining_amount": self._fmt(plan.get("remaining_amount")),
+            "partial_estimated_quote": self._fmt(plan.get("partial_estimated_quote")),
+            "remaining_estimated_quote": self._fmt(plan.get("remaining_estimated_quote")),
+            "min_quote_required": self._fmt(plan.get("min_quote_required")),
+            "reference_price": self._fmt(plan.get("reference_price")),
+        }
+        return self._serialize_scan_detail(detail)
+
     def _select_signal_for_user(
         self,
         client: ExchangeClient,
@@ -543,7 +558,12 @@ class TradingEngine:
                 "dynamic_tp_activation_price": float(best_signal["dynamic_tp_activation_price"]),
                 "score": float(best_signal["score"]),
                 "quantity": float(amount),
+                "original_quantity": float(amount),
                 "quote_amount": float(effective_quote_to_use),
+                "tp1_partial_enabled": float(effective_quote_to_use) >= float((best_signal.get("manager_rules") or {}).get("tp1_partial_min_quote", TP1_PARTIAL_MIN_QUOTE) or 0.0) and float((best_signal.get("manager_rules") or {}).get("tp1_partial_fraction", TP1_PARTIAL_FRACTION) or 0.0) > 0,
+                "tp1_partial_fraction": float((best_signal.get("manager_rules") or {}).get("tp1_partial_fraction", TP1_PARTIAL_FRACTION) or 0.0),
+                "tp1_partial_min_quote": float((best_signal.get("manager_rules") or {}).get("tp1_partial_min_quote", TP1_PARTIAL_MIN_QUOTE) or 0.0),
+                "tp1_partial_done": False,
                 "order_number": order_number,
                 "opened_at": datetime.utcnow(),
                 "quote_asset": rule.quote_asset,
@@ -572,6 +592,9 @@ class TradingEngine:
             self._fmt(best_signal["score"], 2),
             DRY_RUN,
         )
+        tp1_fraction = float((best_signal.get("manager_rules") or {}).get("tp1_partial_fraction", TP1_PARTIAL_FRACTION) or 0.0)
+        tp1_min_quote = float((best_signal.get("manager_rules") or {}).get("tp1_partial_min_quote", TP1_PARTIAL_MIN_QUOTE) or 0.0)
+        tp1_enabled_for_trade = float(effective_quote_to_use) >= tp1_min_quote and tp1_fraction > 0
         self.notifier.send(
             telegram_id,
             (
@@ -580,7 +603,9 @@ class TradingEngine:
                 f"Entrada: {float(fallback_price):.8f}\n"
                 f"SL mental inicial: {best_signal['initial_stop_loss']:.8f}\n"
                 f"Activación TP dinámico: {best_signal['dynamic_tp_activation_price']:.8f}\n"
-                f"Score: {best_signal['score']}"
+                f"TP1 parcial: {'habilitado' if tp1_enabled_for_trade else 'deshabilitado'}"
+                + (f" ({tp1_fraction * 100:.0f}% al activarse el TP dinámico)" if tp1_enabled_for_trade else f" (< {tp1_min_quote:.2f} {rule.quote_asset} operativos)")
+                + f"\nScore: {best_signal['score']}"
             ),
         )
 
@@ -597,6 +622,9 @@ class TradingEngine:
     ) -> Dict:
         opened_at = self._iso_now()
         entry_price_f = float(entry_price)
+        tp1_fraction = float((signal.get("manager_rules") or {}).get("tp1_partial_fraction", TP1_PARTIAL_FRACTION) or 0.0)
+        tp1_min_quote = float((signal.get("manager_rules") or {}).get("tp1_partial_min_quote", TP1_PARTIAL_MIN_QUOTE) or 0.0)
+        tp1_enabled = float(quote_to_use) >= tp1_min_quote and tp1_fraction > 0
         position = {
             "trade_id": trade_id,
             "symbol": signal["symbol"],
@@ -605,12 +633,13 @@ class TradingEngine:
             "order_number": order_number,
             "entry_price": entry_price_f,
             "quantity": float(amount),
+            "original_quantity": float(amount),
             "quote_amount": float(quote_to_use),
             "quote_asset": rule.quote_asset,
             "base_asset": rule.base_asset,
             "score": float(signal["score"]),
             "opened_at": opened_at,
-            "manager_version": 2,
+            "manager_version": 3,
             "initial_stop_loss": float(signal["initial_stop_loss"]),
             "effective_stop_loss": float(signal["initial_stop_loss"]),
             "dynamic_tp_activation_price": float(signal["dynamic_tp_activation_price"]),
@@ -622,11 +651,23 @@ class TradingEngine:
             "max_unrealized_pnl": 0.0,
             "max_r_multiple": 0.0,
             "risk_per_unit": float(signal["risk_per_unit"]),
+            "realized_pnl_quote": 0.0,
             "last_processed_candle_ts": int(signal["entry_candle_ts"]),
             "last_processed_price": entry_price_f,
             "weakness_confirmations": 0,
             "weakness_last_score": 0,
             "weakness_last_reason": [],
+            "tp1_partial_enabled": tp1_enabled,
+            "tp1_partial_fraction": tp1_fraction,
+            "tp1_partial_min_quote": tp1_min_quote,
+            "tp1_partial_done": False,
+            "tp1_partial_done_at": None,
+            "tp1_partial_order_number": None,
+            "tp1_partial_quantity": 0.0,
+            "tp1_partial_price": None,
+            "tp1_partial_quote_amount": 0.0,
+            "tp1_partial_realized_pnl_quote": 0.0,
+            "tp1_partial_skip_reason": None,
             "pending_exit_reason": None,
             "pending_exit_source": None,
             "pending_exit_trigger_price": None,
@@ -660,12 +701,13 @@ class TradingEngine:
             "order_number": position["order_number"],
             "entry_price": entry_price,
             "quantity": float(position.get("quantity") or 0.0),
+            "original_quantity": float(position.get("original_quantity") or position.get("quantity") or 0.0),
             "quote_amount": float(position.get("quote_amount") or 0.0),
             "quote_asset": position.get("quote_asset"),
             "base_asset": position.get("base_asset"),
             "score": float(position.get("score") or 0.0),
             "opened_at": position.get("opened_at") or self._iso_now(),
-            "manager_version": 2,
+            "manager_version": int(position.get("manager_version") or 3),
             "initial_stop_loss": initial_sl,
             "effective_stop_loss": float(position.get("effective_stop_loss") or initial_sl),
             "dynamic_tp_activation_price": activation_price,
@@ -677,11 +719,23 @@ class TradingEngine:
             "max_unrealized_pnl": float(position.get("max_unrealized_pnl") or 0.0),
             "max_r_multiple": float(position.get("max_r_multiple") or 0.0),
             "risk_per_unit": risk_per_unit,
+            "realized_pnl_quote": float(position.get("realized_pnl_quote") or position.get("tp1_partial_realized_pnl_quote") or 0.0),
             "last_processed_candle_ts": int(position.get("last_processed_candle_ts") or opened_ms),
             "last_processed_price": float(position.get("last_processed_price") or entry_price),
             "weakness_confirmations": int(position.get("weakness_confirmations") or 0),
             "weakness_last_score": int(position.get("weakness_last_score") or 0),
             "weakness_last_reason": position.get("weakness_last_reason") or [],
+            "tp1_partial_fraction": float(position.get("tp1_partial_fraction") or ((position.get("strategy") or {}).get("manager_rules", {}).get("tp1_partial_fraction", TP1_PARTIAL_FRACTION)) or 0.0),
+            "tp1_partial_min_quote": float(position.get("tp1_partial_min_quote") or ((position.get("strategy") or {}).get("manager_rules", {}).get("tp1_partial_min_quote", TP1_PARTIAL_MIN_QUOTE)) or 0.0),
+            "tp1_partial_enabled": bool(position.get("tp1_partial_enabled")) if "tp1_partial_enabled" in position else (float(position.get("quote_amount") or 0.0) >= float(((position.get("strategy") or {}).get("manager_rules", {}).get("tp1_partial_min_quote", TP1_PARTIAL_MIN_QUOTE)) or 0.0) and float(((position.get("strategy") or {}).get("manager_rules", {}).get("tp1_partial_fraction", TP1_PARTIAL_FRACTION)) or 0.0) > 0),
+            "tp1_partial_done": bool(position.get("tp1_partial_done")),
+            "tp1_partial_done_at": position.get("tp1_partial_done_at"),
+            "tp1_partial_order_number": position.get("tp1_partial_order_number"),
+            "tp1_partial_quantity": float(position.get("tp1_partial_quantity") or 0.0),
+            "tp1_partial_price": position.get("tp1_partial_price"),
+            "tp1_partial_quote_amount": float(position.get("tp1_partial_quote_amount") or 0.0),
+            "tp1_partial_realized_pnl_quote": float(position.get("tp1_partial_realized_pnl_quote") or 0.0),
+            "tp1_partial_skip_reason": position.get("tp1_partial_skip_reason"),
             "pending_exit_reason": position.get("pending_exit_reason"),
             "pending_exit_source": position.get("pending_exit_source"),
             "pending_exit_trigger_price": position.get("pending_exit_trigger_price"),
@@ -747,6 +801,166 @@ class TradingEngine:
                 break
         return {"state": working_state, "events": events, "exit_signal": exit_signal}
 
+    def _execute_tp1_partial(
+        self,
+        usuario: Dict,
+        client: ExchangeClient,
+        rule,
+        state: Dict,
+        available_base: Decimal,
+        current_price: float,
+    ) -> Decimal:
+        telegram_id = usuario["telegram_id"]
+        trade_id = state["trade_id"]
+        symbol = state["symbol"]
+        tp1_enabled = bool(state.get("tp1_partial_enabled"))
+        tp1_done = bool(state.get("tp1_partial_done"))
+        tp1_fraction = Decimal(str(state.get("tp1_partial_fraction") or 0.0))
+        if not tp1_enabled or tp1_done or tp1_fraction <= 0:
+            return available_base
+
+        total_amount = min(available_base, Decimal(str(state.get("quantity") or 0.0))).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+        plan = client.evaluar_venta_parcial_mercado(
+            symbol=symbol,
+            total_amount=total_amount,
+            fraction=tp1_fraction,
+            rule=rule,
+            reference_price=Decimal(str(current_price)),
+        )
+        if not plan.get("executable"):
+            reason = plan.get("reason") or "TP1_PARTIAL_NOT_EXECUTABLE"
+            state["tp1_partial_enabled"] = False
+            state["tp1_partial_skip_reason"] = reason
+            event = {
+                "type": "TP1_PARTIAL_SKIPPED",
+                "payload": {
+                    "reason": reason,
+                    "detail": self._serialize_partial_sell_plan(plan),
+                },
+            }
+            self._record_events(trade_id, telegram_id, [event])
+            self._log_manager_events(telegram_id, trade_id, symbol, [event])
+            logger.warning(
+                "TP1_PARTIAL_SKIPPED | telegram_id=%s | trade_id=%s | symbol=%s | reason=%s | plan=%s",
+                telegram_id,
+                trade_id,
+                symbol,
+                reason,
+                self._serialize_partial_sell_plan(plan),
+            )
+            return available_base
+
+        adjusted_partial_amount = Decimal(str(plan.get("adjusted_partial_amount") or 0)).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+        fallback_price = Decimal(str(current_price))
+        try:
+            if DRY_RUN:
+                sell_order_number = f"dry-run-tp1-{int(time.time())}"
+                sold_qty = adjusted_partial_amount
+                fill_price = fallback_price
+            else:
+                sell_order = client.crear_orden_mercado_sell(symbol, adjusted_partial_amount, rule)
+                sell_order_number = str(sell_order["orderNumber"])
+                status = client.obtener_estado_orden(sell_order_number)
+                fill = client.estimar_fill_desde_estado(status, fallback_price=fallback_price)
+                sold_qty = fill["amount"] or adjusted_partial_amount
+                fill_price = fill["avg_price"] or fallback_price
+        except Exception as exc:
+            state["tp1_partial_enabled"] = False
+            state["tp1_partial_skip_reason"] = f"EXECUTION_ERROR:{exc}"
+            event = {
+                "type": "TP1_PARTIAL_EXECUTION_ERROR",
+                "payload": {"error": str(exc)},
+            }
+            self._record_events(trade_id, telegram_id, [event])
+            self._log_manager_events(telegram_id, trade_id, symbol, [event])
+            logger.exception(
+                "TP1_PARTIAL_EXECUTION_ERROR | telegram_id=%s | trade_id=%s | symbol=%s",
+                telegram_id,
+                trade_id,
+                symbol,
+            )
+            return available_base
+
+        sold_qty = min(available_base, Decimal(str(sold_qty or adjusted_partial_amount))).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+        if sold_qty <= 0:
+            state["tp1_partial_enabled"] = False
+            state["tp1_partial_skip_reason"] = "ZERO_FILLED_PARTIAL"
+            event = {"type": "TP1_PARTIAL_ZERO_FILL", "payload": {"planned_qty": float(adjusted_partial_amount)}}
+            self._record_events(trade_id, telegram_id, [event])
+            self._log_manager_events(telegram_id, trade_id, symbol, [event])
+            return available_base
+
+        entry_price = Decimal(str(state.get("entry_price") or 0.0))
+        partial_quote_amount = (fill_price * sold_qty).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+        realized_pnl = ((fill_price - entry_price) * sold_qty).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+        remaining_qty = max(Decimal(str(state.get("quantity") or 0.0)) - sold_qty, Decimal("0")).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+        new_available_base = max(available_base - sold_qty, Decimal("0")).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+
+        state["quantity"] = float(remaining_qty)
+        state["realized_pnl_quote"] = float(Decimal(str(state.get("realized_pnl_quote") or 0.0)) + realized_pnl)
+        state["tp1_partial_done"] = True
+        state["tp1_partial_done_at"] = self._iso_now()
+        state["tp1_partial_order_number"] = sell_order_number
+        state["tp1_partial_quantity"] = float(sold_qty)
+        state["tp1_partial_price"] = float(fill_price)
+        state["tp1_partial_quote_amount"] = float(partial_quote_amount)
+        state["tp1_partial_realized_pnl_quote"] = float(realized_pnl)
+        state["tp1_partial_skip_reason"] = None
+
+        event = {
+            "type": "TP1_PARTIAL_EXECUTED",
+            "payload": {
+                "order_number": sell_order_number,
+                "sold_qty": float(sold_qty),
+                "remaining_qty": float(remaining_qty),
+                "fill_price": float(fill_price),
+                "realized_pnl_quote": float(realized_pnl),
+                "quote_amount": float(partial_quote_amount),
+            },
+        }
+        self._record_events(trade_id, telegram_id, [event])
+        self._log_manager_events(telegram_id, trade_id, symbol, [event])
+        OperacionModel.actualizar_operacion(
+            {"telegram_id": telegram_id, "order_number": state["order_number"]},
+            {
+                "tp1_partial_done": True,
+                "tp1_partial_done_at": state["tp1_partial_done_at"],
+                "tp1_partial_order_number": sell_order_number,
+                "tp1_partial_quantity": float(sold_qty),
+                "tp1_partial_price": float(fill_price),
+                "tp1_partial_quote_amount": float(partial_quote_amount),
+                "tp1_partial_realized_pnl_quote": float(realized_pnl),
+                "quantity_remaining": float(remaining_qty),
+                "realized_pnl_quote": float(state.get("realized_pnl_quote") or 0.0),
+            },
+        )
+        self.notifier.send(
+            telegram_id,
+            (
+                f"🟡 TP1 parcial {'simulado' if DRY_RUN else 'ejecutado'}\n"
+                f"Par: {symbol}\n"
+                f"Cantidad vendida: {float(sold_qty):.8f} {rule.base_asset}\n"
+                f"Precio: {float(fill_price):.8f}\n"
+                f"PnL realizada: {float(realized_pnl):.8f} {rule.quote_asset}\n"
+                f"Cantidad restante: {float(remaining_qty):.8f} {rule.base_asset}"
+            ),
+        )
+        logger.info(
+            "TP1_PARTIAL_EXECUTED | telegram_id=%s | trade_id=%s | symbol=%s | qty_sold=%s %s | qty_remaining=%s %s | fill_price=%s | realized_pnl=%s %s | dry_run=%s",
+            telegram_id,
+            trade_id,
+            symbol,
+            self._fmt(sold_qty),
+            rule.base_asset,
+            self._fmt(remaining_qty),
+            rule.base_asset,
+            self._fmt(fill_price),
+            self._fmt(realized_pnl),
+            rule.quote_asset,
+            DRY_RUN,
+        )
+        return new_available_base
+
     def _manage_open_position(self, usuario: Dict, client: ExchangeClient) -> None:
         telegram_id = usuario["telegram_id"]
         position = usuario.get("active_position")
@@ -791,9 +1005,12 @@ class TradingEngine:
             self._record_events(trade_id, telegram_id, live_result["events"])
             self._log_manager_events(telegram_id, trade_id, symbol, live_result["events"])
 
+        exit_signal = replay["exit_signal"] or live_result["exit_signal"]
+        if not exit_signal and bool(state.get("dynamic_tp_active")) and not bool(state.get("tp1_partial_done")):
+            available_base = self._execute_tp1_partial(usuario, client, rule, state, available_base, current_price)
+
         self._emit_manager_snapshot(usuario, state, current_price)
 
-        exit_signal = replay["exit_signal"] or live_result["exit_signal"]
         if exit_signal:
             self._close_managed_position(usuario, client, rule, state, exit_signal)
             return
@@ -820,6 +1037,7 @@ class TradingEngine:
         symbol = state["symbol"]
         entry_price = float(state.get("entry_price") or 0.0)
         quantity = float(state.get("quantity") or 0.0)
+        original_quantity = float(state.get("original_quantity") or quantity)
         initial_stop = float(state.get("initial_stop_loss") or 0.0)
         effective_stop = float(state.get("effective_stop_loss") or initial_stop)
         activation_price = float(state.get("dynamic_tp_activation_price") or 0.0)
@@ -827,8 +1045,12 @@ class TradingEngine:
         high_seen = float(state.get("highest_price_seen") or entry_price)
         risk_per_unit = max(float(state.get("risk_per_unit") or (entry_price - initial_stop)), 1e-12)
         quote_asset = state.get("quote_asset") or QUOTE_ASSET
-        current_pnl_quote = (current_price - entry_price) * quantity if quantity > 0 else 0.0
-        current_pnl_pct = ((current_price / entry_price) - 1.0) * 100.0 if entry_price > 0 else 0.0
+        unrealized_pnl_quote = (current_price - entry_price) * quantity if quantity > 0 else 0.0
+        unrealized_pnl_pct = ((current_price / entry_price) - 1.0) * 100.0 if entry_price > 0 else 0.0
+        realized_pnl_quote = float(state.get("realized_pnl_quote") or 0.0)
+        total_pnl_estimated = realized_pnl_quote + unrealized_pnl_quote
+        invested_notional = (entry_price * original_quantity) if entry_price > 0 and original_quantity > 0 else float(state.get("quote_amount") or 0.0)
+        total_pnl_estimated_pct = (total_pnl_estimated / invested_notional) * 100.0 if invested_notional > 0 else 0.0
         current_r_multiple = (current_price - entry_price) / risk_per_unit if risk_per_unit > 0 else 0.0
         distance_to_stop_pct = ((current_price - effective_stop) / current_price) * 100.0 if current_price > 0 else 0.0
         activation_gap = max(activation_price - current_price, 0.0) if activation_price > 0 else 0.0
@@ -844,17 +1066,29 @@ class TradingEngine:
         break_even_offset_r = float(manager_rules.get("break_even_offset_r", 0.0) or 0.0)
         trail_atr_mult = float(manager_rules.get("trail_stop_atr_multiplier", 0.0) or 0.0)
         weakness_min_score = int(manager_rules.get("weakness_min_score", 0) or 0)
+        tp1_fraction = float(state.get("tp1_partial_fraction") or manager_rules.get("tp1_partial_fraction", 0.0) or 0.0)
+        tp1_min_quote = float(state.get("tp1_partial_min_quote") or manager_rules.get("tp1_partial_min_quote", 0.0) or 0.0)
+        tp1_enabled = bool(state.get("tp1_partial_enabled"))
+        tp1_done = bool(state.get("tp1_partial_done"))
+        tp1_qty = float(state.get("tp1_partial_quantity") or 0.0)
+        tp1_price = state.get("tp1_partial_price")
+        tp1_skip_reason = state.get("tp1_partial_skip_reason") or "none"
 
         logger.info(
-            "MANAGER_TICK | telegram_id=%s | trade_id=%s | symbol=%s | entry=%s | current_price=%s | pnl=%s %s | pnl_pct=%s | r_multiple=%s | initial_stop=%s | effective_stop=%s | stop_gap_pct=%s | dynamic_tp_activation=%s | dynamic_tp_active=%s | dynamic_tp_progress_pct=%s | dynamic_tp_gap=%s | high_seen=%s | qty=%s | weakness_score=%s | weakness_confirmations=%s/%s | weakness_reasons=%s | break_even_offset_r=%s | trail_atr_mult=%s | weakness_min_score=%s",
+            "MANAGER_TICK | telegram_id=%s | trade_id=%s | symbol=%s | entry=%s | current_price=%s | unrealized_pnl=%s %s | unrealized_pnl_pct=%s | realized_pnl=%s %s | total_pnl_estimated=%s %s | total_pnl_estimated_pct=%s | r_multiple=%s | initial_stop=%s | effective_stop=%s | stop_gap_pct=%s | dynamic_tp_activation=%s | dynamic_tp_active=%s | dynamic_tp_progress_pct=%s | dynamic_tp_gap=%s | high_seen=%s | qty=%s | original_qty=%s | tp1_enabled=%s | tp1_done=%s | tp1_fraction_pct=%s | tp1_min_quote=%s | tp1_qty=%s | tp1_price=%s | tp1_skip_reason=%s | weakness_score=%s | weakness_confirmations=%s/%s | weakness_reasons=%s | break_even_offset_r=%s | trail_atr_mult=%s | weakness_min_score=%s",
             telegram_id,
             trade_id,
             symbol,
             self._fmt(entry_price),
             self._fmt(current_price),
-            self._fmt(current_pnl_quote),
+            self._fmt(unrealized_pnl_quote),
             quote_asset,
-            self._fmt(current_pnl_pct, 2),
+            self._fmt(unrealized_pnl_pct, 2),
+            self._fmt(realized_pnl_quote),
+            quote_asset,
+            self._fmt(total_pnl_estimated),
+            quote_asset,
+            self._fmt(total_pnl_estimated_pct, 2),
             self._fmt(current_r_multiple, 2),
             self._fmt(initial_stop),
             self._fmt(effective_stop),
@@ -865,6 +1099,14 @@ class TradingEngine:
             self._fmt(activation_gap),
             self._fmt(high_seen),
             self._fmt(quantity),
+            self._fmt(original_quantity),
+            tp1_enabled,
+            tp1_done,
+            self._fmt(tp1_fraction * 100.0, 2),
+            self._fmt(tp1_min_quote, 2),
+            self._fmt(tp1_qty),
+            self._fmt(tp1_price) if tp1_price is not None else "N/A",
+            tp1_skip_reason,
             weakness_last_score,
             weakness_confirmations,
             weakness_required,
@@ -900,8 +1142,12 @@ class TradingEngine:
                 quantity = min(expected_qty, available_base).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
 
         entry_price = Decimal(str(state["entry_price"]))
-        pnl_quote = (exit_price - entry_price) * quantity
-        pnl_pct = (pnl_quote / (entry_price * quantity) * Decimal("100")) if entry_price > 0 and quantity > 0 else Decimal("0")
+        realized_pnl_quote = Decimal(str(state.get("realized_pnl_quote") or 0.0))
+        leg_pnl_quote = (exit_price - entry_price) * quantity
+        pnl_quote = realized_pnl_quote + leg_pnl_quote
+        original_quantity = Decimal(str(state.get("original_quantity") or state.get("quantity") or 0.0))
+        denominator = (entry_price * original_quantity) if entry_price > 0 and original_quantity > 0 else Decimal(str(state.get("quote_amount") or 0.0))
+        pnl_pct = (pnl_quote / denominator * Decimal("100")) if denominator > 0 else Decimal("0")
 
         UsuarioModel.limpiar_posicion_activa(telegram_id)
         TradeStateModel.cerrar_estado(
@@ -911,8 +1157,11 @@ class TradingEngine:
                 "exit_order_number": sell_order_number,
                 "exit_price": float(exit_price),
                 "quantity_closed": float(quantity),
+                "quantity_closed_total": float(Decimal(str(state.get("tp1_partial_quantity") or 0.0)) + quantity),
                 "pnl_quote": float(pnl_quote),
                 "pnl_pct": float(pnl_pct),
+                "realized_pnl_quote": float(realized_pnl_quote),
+                "final_leg_pnl_quote": float(leg_pnl_quote),
                 "pending_exit_reason": trigger_reason,
                 "pending_exit_source": exit_signal.get("source"),
                 "pending_exit_trigger_price": exit_signal.get("trigger_price"),
@@ -927,6 +1176,8 @@ class TradingEngine:
                 "reason": trigger_reason,
                 "exit_price": float(exit_price),
                 "pnl_quote": float(pnl_quote),
+                "realized_pnl_quote": float(realized_pnl_quote),
+                "final_leg_pnl_quote": float(leg_pnl_quote),
                 "source": exit_signal.get("source"),
                 "triggered_at": exit_signal.get("triggered_at"),
             },
@@ -950,6 +1201,16 @@ class TradingEngine:
                 "pnl_quote": float(pnl_quote),
                 "pnl_pct": float(pnl_pct),
                 "quantity_closed": float(quantity),
+                "quantity_closed_total": float(Decimal(str(state.get("tp1_partial_quantity") or 0.0)) + quantity),
+                "realized_pnl_quote": float(realized_pnl_quote),
+                "final_leg_pnl_quote": float(leg_pnl_quote),
+                "tp1_partial_done": bool(state.get("tp1_partial_done")),
+                "tp1_partial_done_at": state.get("tp1_partial_done_at"),
+                "tp1_partial_order_number": state.get("tp1_partial_order_number"),
+                "tp1_partial_quantity": float(state.get("tp1_partial_quantity") or 0.0),
+                "tp1_partial_price": state.get("tp1_partial_price"),
+                "tp1_partial_quote_amount": float(state.get("tp1_partial_quote_amount") or 0.0),
+                "tp1_partial_realized_pnl_quote": float(state.get("tp1_partial_realized_pnl_quote") or 0.0),
                 "highest_price_seen": float(state.get("highest_price_seen") or 0.0),
                 "dynamic_tp_active": bool(state.get("dynamic_tp_active")),
                 "dynamic_tp_activated_at": state.get("dynamic_tp_activated_at"),
@@ -980,7 +1241,7 @@ class TradingEngine:
             logger.debug("No se pudo obtener balance posterior al cierre para usuario %s", telegram_id)
 
         logger.info(
-            "OPERACION_CERRADA | telegram_id=%s | usuario=%s | symbol=%s | trade_id=%s | close_reason=%s | source=%s | entry=%s | exit=%s | cantidad=%s %s | pnl=%s %s | pnl_pct=%s | fee_generada=%s %s | deuda_fee=%s %s | capital_posterior=%s %s | high_marca=%s | tp_dinamico_activo=%s | invoice_id=%s",
+            "OPERACION_CERRADA | telegram_id=%s | usuario=%s | symbol=%s | trade_id=%s | close_reason=%s | source=%s | entry=%s | exit=%s | cantidad_final=%s %s | cantidad_total_cerrada=%s %s | pnl=%s %s | pnl_pct=%s | pnl_realizada=%s %s | pnl_tramo_final=%s %s | fee_generada=%s %s | deuda_fee=%s %s | capital_posterior=%s %s | high_marca=%s | tp_dinamico_activo=%s | tp1_done=%s | invoice_id=%s",
             telegram_id,
             self._user_name(usuario),
             symbol,
@@ -991,9 +1252,15 @@ class TradingEngine:
             self._fmt(exit_price),
             self._fmt(quantity),
             rule.base_asset,
+            self._fmt(Decimal(str(state.get("tp1_partial_quantity") or 0.0)) + quantity),
+            rule.base_asset,
             self._fmt(pnl_quote),
             rule.quote_asset,
             self._fmt(pnl_pct, 2),
+            self._fmt(realized_pnl_quote),
+            rule.quote_asset,
+            self._fmt(leg_pnl_quote),
+            rule.quote_asset,
             self._fmt(fee_generada),
             rule.quote_asset,
             self._fmt(float((UsuarioModel.obtener_usuario({"telegram_id": telegram_id}) or {}).get("fee_due_total") or 0.0)),
@@ -1002,6 +1269,7 @@ class TradingEngine:
             rule.quote_asset,
             self._fmt(state.get("highest_price_seen")),
             bool(state.get("dynamic_tp_active")),
+            bool(state.get("tp1_partial_done")),
             invoice.get("invoice_id") if invoice else "none",
         )
         if invoice:
@@ -1022,7 +1290,8 @@ class TradingEngine:
             f"Entrada: {float(entry_price):.8f}\n"
             f"Salida: {float(exit_price):.8f}\n"
             f"Máximo visto: {float(state.get('highest_price_seen') or 0.0):.8f}\n"
-            f"PnL: {float(pnl_quote):.8f} {rule.quote_asset} ({float(pnl_pct):.2f}%)"
+            + (f"TP1 parcial realizada: {float(state.get('tp1_partial_realized_pnl_quote') or 0.0):.8f} {rule.quote_asset}\n" if state.get('tp1_partial_done') else "")
+            + f"PnL total: {float(pnl_quote):.8f} {rule.quote_asset} ({float(pnl_pct):.2f}%)"
         )
         if fee_generada > 0:
             message += f"\nFee admin generada: {fee_generada:.8f} {rule.quote_asset}"
