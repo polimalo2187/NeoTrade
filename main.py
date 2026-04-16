@@ -1,8 +1,8 @@
 import logging
-import os
 
 from app.config import APP_SERVICE, LOG_LEVEL
 from app.runtime import ServiceConfigurationError, ServiceRuntimeFactory
+from app.api.app import create_api_app
 
 
 def configure_logging():
@@ -19,17 +19,10 @@ def main():
     runtime.start()
 
 
-# Compatibilidad ASGI: solo exponer app cuando el servicio sea miniapp.
-# Esto evita el error `Attribute 'app' not found in module 'main'` si el host
-# intenta arrancar con `uvicorn main:app` en el servicio web.
-app = None
-if (os.getenv("APP_SERVICE", "").strip().lower() == "miniapp"):
-    try:
-        from app.api.app import create_api_app
-
-        app = create_api_app()
-    except Exception:  # pragma: no cover
-        app = None
+# Compatibilidad ASGI robusta:
+# `uvicorn main:app` debe devolver una app válida o fallar en startup,
+# nunca arrancar con `app=None` y romper recién al primer request.
+app = create_api_app()
 
 
 if __name__ == "__main__":
