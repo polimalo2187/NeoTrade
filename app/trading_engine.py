@@ -115,6 +115,12 @@ class TradingEngine:
             return "none"
         return " | ".join(samples[:limit])
 
+    @staticmethod
+    def _format_reason_list(reasons: List[str], limit: int = 5) -> str:
+        if not reasons:
+            return "none"
+        return ",".join(str(reason) for reason in reasons[:limit])
+
     def __init__(self):
         self.strategy = MTFStrategy()
         self.notifier = TelegramNotifier(TELEGRAM_BOT_TOKEN)
@@ -777,20 +783,15 @@ class TradingEngine:
             )
 
         current_price = float(client.obtener_precio_actual(symbol))
-        logger.info(
-            "MANAGER_TICK | telegram_id=%s | trade_id=%s | symbol=%s | current_price=%s | effective_stop=%s | dynamic_tp_active=%s | high_seen=%s",
-            telegram_id,
-            trade_id,
-            symbol,
-            self._fmt(current_price),
-            self._fmt(state.get("effective_stop_loss")),
-            bool(state.get("dynamic_tp_active")),
-            self._fmt(state.get("highest_price_seen")),
-        )
         live_result = self.strategy.process_live_price(state, current_price)
         state.update(live_result["updates"])
+        if replay["events"]:
+            self._log_manager_events(telegram_id, trade_id, symbol, replay["events"])
         if live_result["events"]:
             self._record_events(trade_id, telegram_id, live_result["events"])
+            self._log_manager_events(telegram_id, trade_id, symbol, live_result["events"])
+
+        self._emit_manager_snapshot(usuario, state, current_price)
 
         exit_signal = replay["exit_signal"] or live_result["exit_signal"]
         if exit_signal:
@@ -798,6 +799,80 @@ class TradingEngine:
             return
 
         self._persist_trade_state(telegram_id, state)
+
+    def _log_manager_events(self, telegram_id: int, trade_id: str, symbol: str, events: List[Dict[str, Any]]) -> None:
+        if not events:
+            return
+        for event in events:
+            payload = event.get("payload") or {}
+            logger.info(
+                "MANAGER_EVENT | telegram_id=%s | trade_id=%s | symbol=%s | type=%s | payload=%s",
+                telegram_id,
+                trade_id,
+                symbol,
+                event.get("type"),
+                self._serialize_scan_detail(payload),
+            )
+
+    def _emit_manager_snapshot(self, usuario: Dict, state: Dict, current_price: float) -> None:
+        telegram_id = usuario["telegram_id"]
+        trade_id = state["trade_id"]
+        symbol = state["symbol"]
+        entry_price = float(state.get("entry_price") or 0.0)
+        quantity = float(state.get("quantity") or 0.0)
+        initial_stop = float(state.get("initial_stop_loss") or 0.0)
+        effective_stop = float(state.get("effective_stop_loss") or initial_stop)
+        activation_price = float(state.get("dynamic_tp_activation_price") or 0.0)
+        dynamic_active = bool(state.get("dynamic_tp_active"))
+        high_seen = float(state.get("highest_price_seen") or entry_price)
+        risk_per_unit = max(float(state.get("risk_per_unit") or (entry_price - initial_stop)), 1e-12)
+        quote_asset = state.get("quote_asset") or QUOTE_ASSET
+        current_pnl_quote = (current_price - entry_price) * quantity if quantity > 0 else 0.0
+        current_pnl_pct = ((current_price / entry_price) - 1.0) * 100.0 if entry_price > 0 else 0.0
+        current_r_multiple = (current_price - entry_price) / risk_per_unit if risk_per_unit > 0 else 0.0
+        distance_to_stop_pct = ((current_price - effective_stop) / current_price) * 100.0 if current_price > 0 else 0.0
+        activation_gap = max(activation_price - current_price, 0.0) if activation_price > 0 else 0.0
+        activation_progress_pct = 0.0
+        if activation_price > entry_price > 0:
+            activation_progress_pct = ((current_price - entry_price) / (activation_price - entry_price)) * 100.0
+            activation_progress_pct = max(0.0, min(activation_progress_pct, 100.0))
+        manager_rules = (state.get("strategy") or {}).get("manager_rules") or {}
+        weakness_confirmations = int(state.get("weakness_confirmations") or 0)
+        weakness_required = int(manager_rules.get("weakness_confirmations_required", 0) or 0)
+        weakness_last_score = int(state.get("weakness_last_score") or 0)
+        weakness_last_reason = state.get("weakness_last_reason") or []
+        break_even_offset_r = float(manager_rules.get("break_even_offset_r", 0.0) or 0.0)
+        trail_atr_mult = float(manager_rules.get("trail_stop_atr_multiplier", 0.0) or 0.0)
+        weakness_min_score = int(manager_rules.get("weakness_min_score", 0) or 0)
+
+        logger.info(
+            "MANAGER_TICK | telegram_id=%s | trade_id=%s | symbol=%s | entry=%s | current_price=%s | pnl=%s %s | pnl_pct=%s | r_multiple=%s | initial_stop=%s | effective_stop=%s | stop_gap_pct=%s | dynamic_tp_activation=%s | dynamic_tp_active=%s | dynamic_tp_progress_pct=%s | dynamic_tp_gap=%s | high_seen=%s | qty=%s | weakness_score=%s | weakness_confirmations=%s/%s | weakness_reasons=%s | break_even_offset_r=%s | trail_atr_mult=%s | weakness_min_score=%s",
+            telegram_id,
+            trade_id,
+            symbol,
+            self._fmt(entry_price),
+            self._fmt(current_price),
+            self._fmt(current_pnl_quote),
+            quote_asset,
+            self._fmt(current_pnl_pct, 2),
+            self._fmt(current_r_multiple, 2),
+            self._fmt(initial_stop),
+            self._fmt(effective_stop),
+            self._fmt(distance_to_stop_pct, 2),
+            self._fmt(activation_price),
+            dynamic_active,
+            self._fmt(activation_progress_pct, 2),
+            self._fmt(activation_gap),
+            self._fmt(high_seen),
+            self._fmt(quantity),
+            weakness_last_score,
+            weakness_confirmations,
+            weakness_required,
+            self._format_reason_list(weakness_last_reason),
+            self._fmt(break_even_offset_r, 3),
+            self._fmt(trail_atr_mult, 3),
+            weakness_min_score,
+        )
 
     def _close_managed_position(self, usuario: Dict, client: ExchangeClient, rule, state: Dict, exit_signal: Dict) -> None:
         telegram_id = usuario["telegram_id"]
