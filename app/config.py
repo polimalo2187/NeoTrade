@@ -38,7 +38,14 @@ MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 ENABLE_TELEGRAM_BOT = _env_bool("ENABLE_TELEGRAM_BOT", True)
+ENABLE_API_SERVER = _env_bool("ENABLE_API_SERVER", True)
 MINI_APP_URL = os.getenv("MINI_APP_URL", "").strip()
+API_HOST = os.getenv("API_HOST", "0.0.0.0").strip()
+API_PORT = _env_int("API_PORT", 8000)
+API_PREFIX = os.getenv("API_PREFIX", "/api/v1").strip() or "/api/v1"
+TELEGRAM_INIT_DATA_MAX_AGE_SECONDS = _env_int("TELEGRAM_INIT_DATA_MAX_AGE_SECONDS", 3600)
+MINI_APP_SESSION_TTL_SECONDS = _env_int("MINI_APP_SESSION_TTL_SECONDS", 43200)
+MINI_APP_SESSION_SECRET = os.getenv("MINI_APP_SESSION_SECRET", "").strip()
 
 # =========================
 # CoinW / Trading
