@@ -2,7 +2,8 @@ import logging
 import time
 from typing import Optional
 
-from app.config import ENABLE_TELEGRAM_BOT
+from app.config import ENABLE_API_SERVER, ENABLE_TELEGRAM_BOT
+from app.api import ApiServer
 from app.models import ensure_indexes
 from app.scheduler import Scheduler
 from app.trading_engine import TradingEngine
@@ -17,12 +18,16 @@ class AppRuntime:
     def __init__(self):
         self.scheduler = Scheduler()
         self.engine = TradingEngine()
+        self.api: Optional[ApiServer] = ApiServer() if ENABLE_API_SERVER else None
         self.bot: Optional[object] = None
 
     def start(self) -> None:
         ensure_indexes()
         self.scheduler.start()
         self.engine.start()
+
+        if self.api:
+            self.api.start()
 
         if ENABLE_TELEGRAM_BOT:
             from app.bot import Bot
