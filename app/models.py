@@ -157,6 +157,26 @@ class UsuarioModel:
         )
 
     @staticmethod
+    def pausar_trading_manual(telegram_id: int):
+        return UsuarioModel.actualizar_usuario(
+            {"telegram_id": telegram_id},
+            {
+                "trading_enabled": False,
+                "trading_pause_reason": "manual_pause",
+            },
+        )
+
+    @staticmethod
+    def reanudar_trading_manual(telegram_id: int):
+        return UsuarioModel.actualizar_usuario(
+            {"telegram_id": telegram_id},
+            {
+                "trading_enabled": True,
+                "trading_pause_reason": None,
+            },
+        )
+
+    @staticmethod
     def actualizar_capital_snapshot(telegram_id: int, capital_total: float, capital_activo: float):
         return UsuarioModel.actualizar_usuario(
             {"telegram_id": telegram_id},
