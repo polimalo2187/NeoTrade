@@ -1,6 +1,7 @@
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 from app.config import CAPITAL_ACTIVO_PORC, PAYMENT_ASSET, QUOTE_ASSET
 from app.exchange import CoinWApiError, CoinWEmptySpotBalanceError, ExchangeClient
@@ -10,6 +11,9 @@ from app.usuario import Usuario
 
 
 logger = logging.getLogger(__name__)
+
+REFERRAL_BOT_USERNAME = "TradeNeo_bot"
+REFERRAL_BOT_URL = f"https://t.me/{REFERRAL_BOT_USERNAME}"
 
 
 @dataclass
@@ -272,8 +276,12 @@ class UserTradingService:
     def get_referral_summary(self, telegram_id: int) -> Dict[str, Any]:
         usuario = self.get_user(telegram_id) or {}
         referidos = ReferidoModel.obtener_referidos({"referidor_id": telegram_id})
+        codigo_referido = str(usuario.get("codigo_referido") or telegram_id)
+        enlace_referido = f"{REFERRAL_BOT_URL}?start={quote(codigo_referido)}"
         return {
-            "codigo_referido": usuario.get("codigo_referido") or str(telegram_id),
+            "codigo_referido": codigo_referido,
+            "enlace_referido": enlace_referido,
+            "bot_username": REFERRAL_BOT_USERNAME,
             "ganancia_diaria": float(usuario.get("ganancia_diaria_referidos", 0) or 0),
             "ganancia_acumulada": float(usuario.get("ganancia_acumulada_referidos", 0) or 0),
             "referidos_activos": len(referidos),
