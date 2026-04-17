@@ -20,6 +20,7 @@ REFERRAL_BOT_URL = f"https://t.me/{REFERRAL_BOT_USERNAME}"
 class StartSessionResult:
     user: Dict[str, Any]
     created: bool
+    referral_linked: bool = False
 
 
 @dataclass
@@ -75,6 +76,15 @@ class UserTradingService:
         return cleaned.strip("`\"' ")
 
     @staticmethod
+    def normalize_referral_code(value: Optional[str]) -> str:
+        if value is None:
+            return ""
+        cleaned = str(value).strip()
+        if cleaned.lower().startswith("ref_"):
+            cleaned = cleaned[4:]
+        return cleaned.strip()
+
+    @staticmethod
     def format_decimal(value: float) -> str:
         return f"{float(value):.8f}"
 
@@ -87,11 +97,16 @@ class UserTradingService:
             return "*" * len(value)
         return f"{value[:4]}...{value[-4:]}"
 
-    def get_or_create_user(self, telegram_id: int, first_name: Optional[str]) -> StartSessionResult:
+    def get_or_create_user(
+        self,
+        telegram_id: int,
+        first_name: Optional[str],
+        referral_code: Optional[str] = None,
+    ) -> StartSessionResult:
         nombre_usuario = first_name or "usuario"
         usuario_data = UsuarioModel.obtener_usuario({"telegram_id": telegram_id})
         if usuario_data:
-            return StartSessionResult(user=usuario_data, created=False)
+            return StartSessionResult(user=usuario_data, created=False, referral_linked=False)
 
         UsuarioModel.crear_usuario(
             {
@@ -100,12 +115,13 @@ class UserTradingService:
                 "codigo_referido": str(telegram_id),
             }
         )
+        referral_linked = self._link_referral_if_possible(telegram_id, referral_code)
         usuario_data = UsuarioModel.obtener_usuario({"telegram_id": telegram_id}) or {
             "telegram_id": telegram_id,
             "nombre": nombre_usuario,
             "codigo_referido": str(telegram_id),
         }
-        return StartSessionResult(user=usuario_data, created=True)
+        return StartSessionResult(user=usuario_data, created=True, referral_linked=referral_linked)
 
     def reset_navigation_state(self, telegram_id: int, clear_temp_api: bool = False) -> None:
         updates = {"estado": None}
@@ -122,6 +138,38 @@ class UserTradingService:
     def ensure_web_session_user(self, telegram_id: int, first_name: Optional[str]) -> Dict[str, Any]:
         session = self.get_or_create_user(telegram_id, first_name)
         return session.user
+
+    def _link_referral_if_possible(self, telegram_id: int, referral_code: Optional[str]) -> bool:
+        referral_code = self.normalize_referral_code(referral_code)
+        if not referral_code:
+            return False
+
+        usuario = self.get_user(telegram_id)
+        if not usuario or usuario.get("referidor_id"):
+            return False
+
+        if referral_code in {str(telegram_id), str(usuario.get("codigo_referido") or telegram_id)}:
+            return False
+
+        referrer = UsuarioModel.obtener_usuario({"codigo_referido": referral_code})
+        if not referrer and referral_code.isdigit():
+            referrer = UsuarioModel.obtener_usuario({"telegram_id": int(referral_code)})
+        if not referrer:
+            return False
+
+        referidor_id = int(referrer.get("telegram_id"))
+        if referidor_id == int(telegram_id):
+            return False
+
+        UsuarioModel.vincular_referidor(telegram_id, referidor_id, referral_code)
+        ReferidoModel.vincular_referido(referidor_id, telegram_id, referral_code)
+        logger.info(
+            "REFERRAL_LINKED | referido_id=%s | referidor_id=%s | referral_code=%s",
+            telegram_id,
+            referidor_id,
+            referral_code,
+        )
+        return True
 
     def activate_bot(self, telegram_id: int) -> BotActivationResult:
         usuario = self.get_user(telegram_id)
@@ -284,6 +332,9 @@ class UserTradingService:
             "bot_username": REFERRAL_BOT_USERNAME,
             "ganancia_diaria": float(usuario.get("ganancia_diaria_referidos", 0) or 0),
             "ganancia_acumulada": float(usuario.get("ganancia_acumulada_referidos", 0) or 0),
+            "saldo_pendiente": float(usuario.get("referral_pending_balance", 0) or 0),
+            "saldo_disponible": float(usuario.get("referral_available_balance", 0) or 0),
+            "saldo_pagado": float(usuario.get("referral_paid_total", 0) or 0),
             "referidos_activos": len(referidos),
             "referidos": referidos,
         }
@@ -366,6 +417,8 @@ class UserTradingService:
             "telegram_id": usuario.get("telegram_id"),
             "nombre": usuario.get("nombre"),
             "codigo_referido": usuario.get("codigo_referido"),
+            "referidor_id": usuario.get("referidor_id"),
+            "referred_by_code": usuario.get("referred_by_code"),
             "bot_activo": bool(usuario.get("bot_activo")),
             "trading_enabled": bool(usuario.get("trading_enabled", True)),
             "trading_pause_reason": usuario.get("trading_pause_reason"),
@@ -376,6 +429,11 @@ class UserTradingService:
             "fee_percent": float(usuario.get("fee_percent", 0) or 0),
             "payment_asset": usuario.get("payment_asset") or PAYMENT_ASSET,
             "payment_method": usuario.get("payment_method") or "coinw_internal",
+            "referral_pending_balance": float(usuario.get("referral_pending_balance", 0) or 0),
+            "referral_available_balance": float(usuario.get("referral_available_balance", 0) or 0),
+            "referral_paid_total": float(usuario.get("referral_paid_total", 0) or 0),
+            "ganancia_diaria_referidos": float(usuario.get("ganancia_diaria_referidos", 0) or 0),
+            "ganancia_acumulada_referidos": float(usuario.get("ganancia_acumulada_referidos", 0) or 0),
             "capital_total": float(usuario.get("capital_total", 0) or 0),
             "capital_activo": float(usuario.get("capital_activo", 0) or 0),
             "active_position": usuario.get("active_position"),
