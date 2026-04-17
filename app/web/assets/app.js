@@ -25,9 +25,7 @@ const els = {
   feeReportForm: document.getElementById('feeReportForm'),
   apiKeyInput: document.getElementById('apiKeyInput'),
   apiSecretInput: document.getElementById('apiSecretInput'),
-  pasteApiKeyButton: document.getElementById('pasteApiKeyButton'),
   clearApiKeyButton: document.getElementById('clearApiKeyButton'),
-  pasteApiSecretButton: document.getElementById('pasteApiSecretButton'),
   clearApiSecretButton: document.getElementById('clearApiSecretButton'),
   toggleApiSecretButton: document.getElementById('toggleApiSecretButton'),
   feeReportInput: document.getElementById('feeReportInput'),
@@ -168,27 +166,6 @@ function focusInput(input) {
   }
 }
 
-async function pasteClipboardIntoInput(input, label) {
-  clearNotice();
-  try {
-    if (!navigator.clipboard?.readText) {
-      focusInput(input);
-      showNotice('error', `Tu dispositivo no permite pegar automáticamente en ${label}. Toca el campo y usa pegar desde el teclado.`);
-      return;
-    }
-    const text = await navigator.clipboard.readText();
-    if (!text) {
-      throw new Error(`El portapapeles está vacío. Copia primero tu ${label}.`);
-    }
-    input.value = text.trim();
-    focusInput(input);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    showNotice('success', `${label} pegado desde el portapapeles.`);
-  } catch (error) {
-    focusInput(input);
-    showNotice('error', error.message || `No se pudo pegar ${label}. Toca el campo y usa pegar desde el teclado.`);
-  }
-}
 
 function clearInputValue(input) {
   if (!input) return;
@@ -210,9 +187,7 @@ function bindCredentialFieldHelpers() {
     input.addEventListener('click', () => focusInput(input));
   });
 
-  els.pasteApiKeyButton.addEventListener('click', () => pasteClipboardIntoInput(els.apiKeyInput, 'API Key'));
   els.clearApiKeyButton.addEventListener('click', () => clearInputValue(els.apiKeyInput));
-  els.pasteApiSecretButton.addEventListener('click', () => pasteClipboardIntoInput(els.apiSecretInput, 'API Secret'));
   els.clearApiSecretButton.addEventListener('click', () => clearInputValue(els.apiSecretInput));
   els.toggleApiSecretButton.addEventListener('click', toggleApiSecretVisibility);
 }
@@ -330,9 +305,7 @@ function setButtonsDisabled(disabled) {
     els.sendFeeReportButton,
     els.apiKeyInput,
     els.apiSecretInput,
-    els.pasteApiKeyButton,
     els.clearApiKeyButton,
-    els.pasteApiSecretButton,
     els.clearApiSecretButton,
     els.toggleApiSecretButton,
     els.feeReportInput,
