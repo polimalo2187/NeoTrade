@@ -449,6 +449,10 @@ img {
   gap: 14px;
 }
 
+.form-stack--compact {
+  margin-top: 16px;
+}
+
 label span {
   display: block;
   margin-bottom: 8px;
