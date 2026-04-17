@@ -4,7 +4,10 @@ const state = {
   dashboard: null,
   appInfo: null,
   telegramIdentity: null,
+  sessionClaims: null,
+  adminSummary: null,
   isAuthenticated: false,
+  isAdmin: false,
 };
 
 const els = {
@@ -71,6 +74,20 @@ const els = {
   operationsPanel: document.getElementById('operationsPanel'),
   statesPanel: document.getElementById('statesPanel'),
   eventsPanel: document.getElementById('eventsPanel'),
+  adminPanel: document.getElementById('adminPanel'),
+  adminPanelError: document.getElementById('adminPanelError'),
+  adminGeneratedAt: document.getElementById('adminGeneratedAt'),
+  adminUsersTotal: document.getElementById('adminUsersTotal'),
+  adminBotsActive: document.getElementById('adminBotsActive'),
+  adminUsersWithCredentials: document.getElementById('adminUsersWithCredentials'),
+  adminActivePositions: document.getElementById('adminActivePositions'),
+  adminFeeBlocked: document.getElementById('adminFeeBlocked'),
+  adminCapitalTotal: document.getElementById('adminCapitalTotal'),
+  adminPendingInvoices: document.getElementById('adminPendingInvoices'),
+  adminPendingPayouts: document.getElementById('adminPendingPayouts'),
+  adminRecentUsersList: document.getElementById('adminRecentUsersList'),
+  adminPendingPayoutsList: document.getElementById('adminPendingPayoutsList'),
+  adminEngineIssuesList: document.getElementById('adminEngineIssuesList'),
   tabs: Array.from(document.querySelectorAll('.tab')),
   listEmptyTemplate: document.getElementById('listEmptyTemplate'),
 };
@@ -93,6 +110,37 @@ function showNotice(type, message) {
 function clearNotice() {
   showNotice(null, '');
 }
+
+function decodeSessionToken(token) {
+  if (!token || !token.includes('.')) return null;
+  try {
+    const [payload] = token.split('.', 1);
+    const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+    const decoded = atob(padded);
+    return JSON.parse(decoded);
+  } catch {
+    return null;
+  }
+}
+
+function hideAdminPanel() {
+  state.adminSummary = null;
+  if (els.adminPanel) {
+    els.adminPanel.classList.add('hidden');
+  }
+  if (els.adminPanelError) {
+    els.adminPanelError.classList.add('hidden');
+    els.adminPanelError.textContent = '';
+  }
+}
+
+function showAdminPanelError(message) {
+  if (!els.adminPanelError) return;
+  els.adminPanelError.textContent = message;
+  els.adminPanelError.classList.remove('hidden');
+}
+
 
 function setConnectionBadge(kind, text) {
   els.connectionBadge.className = 'badge';
@@ -269,6 +317,8 @@ async function authenticateTelegram() {
     body: JSON.stringify({ init_data: tg.initData }),
   });
   state.token = authPayload.access_token;
+  state.sessionClaims = authPayload.user || decodeSessionToken(state.token);
+  state.isAdmin = Boolean(state.sessionClaims?.is_admin);
   state.isAuthenticated = true;
   sessionStorage.setItem('neotrade-miniapp-token', state.token);
   setConnectionBadge('success', 'Conectado');
@@ -282,12 +332,16 @@ async function restoreOrAuthenticate() {
     state.token = cached;
     try {
       await fetchJson(`${apiPrefix()}/me`);
+      state.sessionClaims = decodeSessionToken(state.token);
+      state.isAdmin = Boolean(state.sessionClaims?.is_admin);
       state.isAuthenticated = true;
       setConnectionBadge('success', 'Sesión activa');
       return true;
     } catch {
       sessionStorage.removeItem('neotrade-miniapp-token');
       state.token = null;
+      state.sessionClaims = null;
+      state.isAdmin = false;
     }
   }
   return authenticateTelegram();
@@ -361,6 +415,7 @@ function renderReadonlyPreview() {
   els.copyFeeInvoiceButton.disabled = true;
   els.requestReferralPayoutButton.disabled = true;
   setButtonsDisabled(true);
+  hideAdminPanel();
   renderList(els.operationsPanel, []);
   renderList(els.statesPanel, []);
   renderList(els.eventsPanel, []);
@@ -443,6 +498,141 @@ function tradeEventCard(item) {
     payloadSummary || 'Evento sin payload adicional.',
     [item.symbol ? `Símbolo ${item.symbol}` : null],
   );
+}
+
+
+function makeActionButton(label, variant = 'ghost') {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = `button button--${variant} button--small`;
+  button.textContent = label;
+  return button;
+}
+
+function adminUserCard(item) {
+  const body = `ID ${textOrDash(item.telegram_id, 'sin ID')} · Capital ${formatMoney(asNumber(item.capital_total, 0))} · Activo ${formatMoney(asNumber(item.capital_activo, 0))}`;
+  return makeTimelineCard(
+    textOrDash(item.nombre, 'Usuario'),
+    formatDate(item.updated_at),
+    body,
+    [
+      item.bot_activo ? 'Bot activo' : 'Bot detenido',
+      item.has_api_credentials ? 'API OK' : 'Sin API',
+      item.active_position ? 'Posición abierta' : null,
+      item.fee_status && item.fee_status !== 'clear' ? `Fee ${item.fee_status}` : null,
+      item.last_engine_error ? 'Revisar engine' : null,
+    ],
+  );
+}
+
+function adminEngineIssueCard(item) {
+  const body = textOrDash(item.error, 'Sin detalle de error.');
+  return makeTimelineCard(
+    `${textOrDash(item.nombre, 'Usuario')} · ${textOrDash(item.telegram_id, 'sin ID')}`,
+    formatDate(item.updated_at),
+    body,
+    [
+      item.bot_activo ? 'Bot activo' : 'Bot detenido',
+      item.trading_enabled ? 'Trading habilitado' : 'Trading pausado',
+    ],
+  );
+}
+
+function adminPayoutCard(item) {
+  const amount = formatMoney(asNumber(item.amount_requested || item.amount_reserved, 0), item.asset || 'USDT');
+  const title = `${textOrDash(item.user?.nombre, 'Usuario')} · ${amount}`;
+  const subtitle = `${formatDate(item.created_at)} · ${textOrDash(item.status, 'requested')}`;
+  const body = [
+    `Telegram ID: ${textOrDash(item.referidor_id, 'sin ID')}`,
+    `UID CoinW: ${textOrDash(item.coinw_uid || item.user?.referral_coinw_uid, 'No configurado')}`,
+    `Saldo reservado: ${formatMoney(asNumber(item.user?.referral_reserved_balance, 0), item.asset || 'USDT')}`,
+  ].join(' · ');
+  const card = makeTimelineCard(title, subtitle, body, [
+    item.user?.bot_activo ? 'Bot activo' : 'Bot detenido',
+    item.user?.has_api_credentials ? 'API OK' : 'Sin API',
+  ]);
+  const footer = document.createElement('div');
+  footer.className = 'timeline-card__actions';
+  const confirmButton = makeActionButton('Confirmar pago', 'secondary');
+  confirmButton.addEventListener('click', () => confirmReferralPayout(item.request_id));
+  const rejectButton = makeActionButton('Rechazar', 'ghost');
+  rejectButton.addEventListener('click', () => rejectReferralPayout(item.request_id));
+  footer.append(confirmButton, rejectButton);
+  card.appendChild(footer);
+  return card;
+}
+
+function renderAdminSummary(payload) {
+  state.adminSummary = payload;
+  if (els.adminPanel) {
+    els.adminPanel.classList.remove('hidden');
+  }
+  if (els.adminPanelError) {
+    els.adminPanelError.classList.add('hidden');
+    els.adminPanelError.textContent = '';
+  }
+
+  const asset = state.dashboard?.user?.payment_asset || 'USDT';
+  els.adminGeneratedAt.textContent = `Última sincronización ${formatDate(payload.generated_at)}`;
+  els.adminUsersTotal.textContent = String(asNumber(payload.users?.total, 0));
+  els.adminBotsActive.textContent = String(asNumber(payload.users?.active_bot, 0));
+  els.adminUsersWithCredentials.textContent = String(asNumber(payload.users?.with_credentials, 0));
+  els.adminActivePositions.textContent = String(asNumber(payload.users?.active_positions, 0));
+  els.adminFeeBlocked.textContent = String(asNumber(payload.users?.blocked_fee, 0));
+  els.adminCapitalTotal.textContent = formatMoney(asNumber(payload.users?.capital_total_estimated, 0), asset);
+  els.adminPendingInvoices.textContent = String(asNumber(payload.finance?.pending_invoices_count, 0));
+  els.adminPendingPayouts.textContent = String(asNumber(payload.finance?.pending_referral_payouts_count, 0));
+
+  renderList(els.adminRecentUsersList, payload.recent_users || [], adminUserCard);
+  renderList(els.adminPendingPayoutsList, payload.pending_referral_payouts || [], adminPayoutCard);
+  renderList(els.adminEngineIssuesList, payload.recent_engine_errors || [], adminEngineIssueCard);
+}
+
+async function loadAdminPanel() {
+  if (!state.isAuthenticated || !state.isAdmin) {
+    hideAdminPanel();
+    return;
+  }
+  try {
+    const payload = await fetchJson(`${apiPrefix()}/admin/summary`);
+    renderAdminSummary(payload);
+  } catch (error) {
+    if (els.adminPanel) {
+      els.adminPanel.classList.remove('hidden');
+    }
+    showAdminPanelError(error.message || 'No se pudo cargar el panel de administración.');
+  }
+}
+
+async function confirmReferralPayout(requestId) {
+  if (!requestId) return;
+  const accepted = window.confirm('¿Confirmar este payout de referido como pagado?');
+  if (!accepted) return;
+  clearNotice();
+  try {
+    await fetchJson(`${apiPrefix()}/admin/referral-payouts/${requestId}/confirm`, { method: 'POST' });
+    showNotice('success', 'Payout de referido confirmado.');
+    await loadDashboard();
+  } catch (error) {
+    showNotice('error', error.message);
+  }
+}
+
+async function rejectReferralPayout(requestId) {
+  if (!requestId) return;
+  const reason = window.prompt('Motivo del rechazo', 'Solicitud rechazada por administración');
+  if (reason === null) return;
+  clearNotice();
+  try {
+    await fetchJson(`${apiPrefix()}/admin/referral-payouts/${requestId}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: reason.trim() || 'Solicitud rechazada por administración' }),
+    });
+    showNotice('success', 'Payout de referido rechazado.');
+    await loadDashboard();
+  } catch (error) {
+    showNotice('error', error.message);
+  }
 }
 
 function invoiceText(invoice) {
@@ -588,6 +778,7 @@ async function loadDashboard({ refreshCapital = false } = {}) {
   const payload = await fetchJson(`${apiPrefix()}/me/dashboard?${query.toString()}`);
   setButtonsDisabled(false);
   updateDashboardView(payload);
+  await loadAdminPanel();
   setConnectionBadge('success', 'Conectado');
   els.app.classList.remove('shell--loading');
 }
