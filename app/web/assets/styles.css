@@ -70,7 +70,7 @@ img {
   padding: 24px;
   margin-bottom: 16px;
   overflow: hidden;
-  min-height: 420px;
+  min-height: 380px;
 }
 
 .topbar::before {
@@ -94,7 +94,7 @@ img {
 .brand__stack {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 12px;
   min-width: 0;
   width: 100%;
   min-height: 100%;
@@ -110,11 +110,11 @@ img {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 8px 0;
+  padding: 0;
 }
 
 .brand__logo--hero {
-  max-width: min(760px, 100%);
+  max-width: min(980px, 100%);
   width: 100%;
 }
 
@@ -126,8 +126,7 @@ img {
 }
 
 .brand__logo--hero img {
-  transform: scale(1.12);
-  transform-origin: center center;
+  transform: none;
 }
 
 .brand__footer {
