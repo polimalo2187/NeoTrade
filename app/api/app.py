@@ -456,6 +456,22 @@ def create_api_app() -> FastAPI:
             }
         )
 
+    @app.get(f"{API_PREFIX}/admin/users/search")
+    def admin_users_search(
+        query: str = "",
+        limit: int = 20,
+        current_admin: AuthenticatedUser = Depends(get_admin_user),
+    ):
+        results = service.admin_search_users(query, limit=limit)
+        return _json({"query": query, "count": len(results), "results": results})
+
+    @app.get(f"{API_PREFIX}/admin/users/{telegram_id}")
+    def admin_user_detail(telegram_id: int, current_admin: AuthenticatedUser = Depends(get_admin_user)):
+        detail = service.admin_get_user_detail(telegram_id)
+        if not detail:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
+        return _json(detail)
+
     @app.get(f"{API_PREFIX}/admin/referral-payouts")
     def admin_referral_payouts(current_admin: AuthenticatedUser = Depends(get_admin_user)):
         requests = ReferralPayoutRequestModel.obtener_requests({}, limit=100)
