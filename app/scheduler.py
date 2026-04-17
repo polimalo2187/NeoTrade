@@ -8,7 +8,6 @@ import pytz
 from app.config import ENABLE_SCHEDULER, HORARIO_COBRO_FEE, HORARIO_PAGO_REFERIDOS
 from app.fee_manager import FeeManager
 from app.models import ReferidoModel, UsuarioModel
-from app.referidos import Referido
 
 
 logger = logging.getLogger(__name__)
@@ -43,7 +42,7 @@ class Scheduler:
                     self._cobrar_fee_diaria()
                     time.sleep(60)
                 if now.strftime("%H:%M") == HORARIO_PAGO_REFERIDOS:
-                    self._pago_referidos()
+                    self._resumen_referidos()
                     time.sleep(60)
             except Exception:
                 logger.exception("Error en scheduler")
@@ -57,15 +56,22 @@ class Scheduler:
         self.fee_manager.cobrar_fee_diaria(usuarios)
         logger.info("Cobro diario ejecutado.")
 
-    def _pago_referidos(self):
+    def _resumen_referidos(self):
+        """No liquida pagos automáticos.
+
+        Las comisiones de referido pasan a saldo disponible cuando el fee del usuario referido
+        queda realmente cobrado y confirmado. El pago al referidor se definirá en una fase aparte.
+        """
         referidos_data = ReferidoModel.obtener_referidos({})
         if not referidos_data:
-            logger.info("No hay referidos para pagar.")
+            logger.info("No hay referidos registrados.")
             return
-        for r in referidos_data:
-            Referido(
-                referidor_id=r["referidor_id"],
-                referido_id=r["referido_id"],
-                comision=r.get("ganancia_diaria", 0),
-            ).pagar_comision()
-        logger.info("Pago de referidos ejecutado.")
+
+        total_pendiente = sum(float(r.get("total_pendiente", 0) or 0) for r in referidos_data)
+        total_disponible = sum(float(r.get("total_disponible", 0) or 0) for r in referidos_data)
+        logger.info(
+            "RESUMEN_REFERIDOS | relaciones=%s | pendiente=%s | disponible=%s",
+            len(referidos_data),
+            f"{total_pendiente:.8f}",
+            f"{total_disponible:.8f}",
+        )
