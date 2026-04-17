@@ -617,6 +617,7 @@ class UserTradingService:
             "minimum_amount": payout_state.get("minimum_amount"),
             "cooldown_hours": payout_state.get("cooldown_hours"),
             "active_payout_request": payout_state.get("active_request"),
+            "has_active_payout_request": bool(payout_state.get("active_request")),
             "can_request_payout": payout_state.get("can_request"),
             "payout_request_reason": payout_state.get("reason"),
             "last_requested_at": payout_state.get("last_requested_at"),
