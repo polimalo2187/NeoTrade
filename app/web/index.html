@@ -325,6 +325,87 @@
             </div>
           </article>
         </section>
+
+        <section id="adminPanel" class="hidden">
+          <article class="surface panel">
+            <div class="panel__header">
+              <div>
+                <p class="eyebrow">Administración</p>
+                <h3>Panel de control</h3>
+                <p id="adminGeneratedAt" class="helper-text helper-text--compact">Solo visible para administradores autorizados.</p>
+              </div>
+              <span class="badge badge--warning">Admin</span>
+            </div>
+
+            <div id="adminPanelError" class="notice notice--danger hidden"></div>
+
+            <div class="metrics-grid metrics-grid--admin">
+              <article class="metric-card surface-inset">
+                <span class="metric-card__label">Usuarios totales</span>
+                <strong id="adminUsersTotal">0</strong>
+                <small>Base actual registrada</small>
+              </article>
+              <article class="metric-card surface-inset">
+                <span class="metric-card__label">Bots activos</span>
+                <strong id="adminBotsActive">0</strong>
+                <small>Usuarios con operativa encendida</small>
+              </article>
+              <article class="metric-card surface-inset">
+                <span class="metric-card__label">Credenciales válidas</span>
+                <strong id="adminUsersWithCredentials">0</strong>
+                <small>Usuarios listos para conectar CoinW</small>
+              </article>
+              <article class="metric-card surface-inset">
+                <span class="metric-card__label">Posiciones activas</span>
+                <strong id="adminActivePositions">0</strong>
+                <small>Seguimiento vivo del engine</small>
+              </article>
+              <article class="metric-card surface-inset">
+                <span class="metric-card__label">Bloqueados por fee</span>
+                <strong id="adminFeeBlocked">0</strong>
+                <small>Usuarios detenidos por cobro pendiente</small>
+              </article>
+              <article class="metric-card surface-inset">
+                <span class="metric-card__label">Capital estimado</span>
+                <strong id="adminCapitalTotal">0.00 USDT</strong>
+                <small>Suma aproximada reportada por usuarios</small>
+              </article>
+              <article class="metric-card surface-inset">
+                <span class="metric-card__label">Fees pendientes</span>
+                <strong id="adminPendingInvoices">0</strong>
+                <small>Facturas esperando revisión o pago</small>
+              </article>
+              <article class="metric-card surface-inset">
+                <span class="metric-card__label">Payouts pendientes</span>
+                <strong id="adminPendingPayouts">0</strong>
+                <small>Solicitudes de referidos por procesar</small>
+              </article>
+            </div>
+
+            <div class="admin-grid">
+              <article class="surface-inset account-section">
+                <div class="account-section__header">
+                  <p class="eyebrow">Usuarios recientes</p>
+                </div>
+                <div id="adminRecentUsersList" class="list-panel"></div>
+              </article>
+
+              <article class="surface-inset account-section">
+                <div class="account-section__header">
+                  <p class="eyebrow">Payouts de referidos</p>
+                </div>
+                <div id="adminPendingPayoutsList" class="list-panel"></div>
+              </article>
+
+              <article class="surface-inset account-section">
+                <div class="account-section__header">
+                  <p class="eyebrow">Salud operativa</p>
+                </div>
+                <div id="adminEngineIssuesList" class="list-panel"></div>
+              </article>
+            </div>
+          </article>
+        </section>
       </main>
     </div>
 
