@@ -381,6 +381,36 @@ img {
   margin-top: 16px;
 }
 
+.surface-inset {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(148, 163, 184, 0.08);
+  border-radius: 18px;
+}
+
+.profile-card {
+  padding: 18px;
+}
+
+.profile-card--session {
+  margin-bottom: 16px;
+}
+
+.account-section {
+  padding: 18px;
+}
+
+.account-section + .account-section {
+  margin-top: 16px;
+}
+
+.account-section__header {
+  margin-bottom: 12px;
+}
+
+.status-list--section {
+  margin-top: 0;
+}
+
 .status-list {
   display: grid;
   gap: 14px;
