@@ -472,6 +472,71 @@ def create_api_app() -> FastAPI:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
         return _json(detail)
 
+    @app.post(f"{API_PREFIX}/admin/users/{{telegram_id}}/capital/refresh")
+    def admin_user_refresh_capital(telegram_id: int, current_admin: AuthenticatedUser = Depends(get_admin_user)):
+        result = service.admin_refresh_user_capital(telegram_id)
+        if result.status == "user_not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
+        if result.status in {"missing_credentials", "capital_refresh_failed"}:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=result.reason or result.status)
+        return _json({
+            "status": result.status,
+            "reason": result.reason,
+            "user": service.serialize_user_public(result.user or {}),
+        })
+
+    @app.post(f"{API_PREFIX}/admin/users/{{telegram_id}}/bot/activate")
+    def admin_user_activate_bot(telegram_id: int, current_admin: AuthenticatedUser = Depends(get_admin_user)):
+        result = service.admin_activate_user_bot(telegram_id)
+        if result.status == "user_not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
+        if result.status in {"missing_credentials", "empty_spot_balance"}:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=result.reason or result.status)
+        return _json({
+            "status": result.status,
+            "reason": result.reason,
+            "invoice": result.invoice,
+            "user": service.serialize_user_public(result.user or {}),
+        })
+
+    @app.post(f"{API_PREFIX}/admin/users/{{telegram_id}}/bot/deactivate")
+    def admin_user_deactivate_bot(telegram_id: int, current_admin: AuthenticatedUser = Depends(get_admin_user)):
+        result = service.admin_deactivate_user_bot(telegram_id)
+        if result.status == "user_not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
+        return _json({
+            "status": result.status,
+            "user": service.serialize_user_public(result.user or {}),
+        })
+
+    @app.post(f"{API_PREFIX}/admin/users/{{telegram_id}}/trading/pause")
+    def admin_user_pause_trading(telegram_id: int, current_admin: AuthenticatedUser = Depends(get_admin_user)):
+        result = service.admin_pause_user_trading(telegram_id)
+        if result.status == "user_not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
+        if result.status == "fee_locked":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=result.reason or "Trading bloqueado por fee")
+        return _json({
+            "status": result.status,
+            "reason": result.reason,
+            "invoice": result.invoice,
+            "user": service.serialize_user_public(result.user or {}),
+        })
+
+    @app.post(f"{API_PREFIX}/admin/users/{{telegram_id}}/trading/resume")
+    def admin_user_resume_trading(telegram_id: int, current_admin: AuthenticatedUser = Depends(get_admin_user)):
+        result = service.admin_resume_user_trading(telegram_id)
+        if result.status == "user_not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
+        if result.status == "fee_locked":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=result.reason or "Trading bloqueado por fee")
+        return _json({
+            "status": result.status,
+            "reason": result.reason,
+            "invoice": result.invoice,
+            "user": service.serialize_user_public(result.user or {}),
+        })
+
     @app.get(f"{API_PREFIX}/admin/referral-payouts")
     def admin_referral_payouts(current_admin: AuthenticatedUser = Depends(get_admin_user)):
         requests = ReferralPayoutRequestModel.obtener_requests({}, limit=100)
