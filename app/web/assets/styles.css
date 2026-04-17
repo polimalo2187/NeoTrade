@@ -387,6 +387,29 @@ img {
   margin-top: 16px;
 }
 
+
+.metrics-grid--admin {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 16px;
+}
+
+.admin-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.helper-text--compact {
+  margin-top: 6px;
+}
+
+.timeline-card__actions {
+  margin-top: 12px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .surface-inset {
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid rgba(148, 163, 184, 0.08);
@@ -638,13 +661,15 @@ textarea:focus {
 }
 
 @media (max-width: 1180px) {
-  .metrics-grid {
+  .metrics-grid,
+  .metrics-grid--admin {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .actions-grid,
   .split-layout,
-  .hero {
+  .hero,
+  .admin-grid {
     grid-template-columns: 1fr;
   }
 
@@ -683,6 +708,7 @@ textarea:focus {
   }
 
   .metrics-grid,
+  .metrics-grid--admin,
   .button-row {
     grid-template-columns: 1fr;
   }
