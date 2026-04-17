@@ -660,6 +660,30 @@ textarea:focus {
   color: #fde68a;
 }
 
+.list-panel--spaced {
+  margin-top: 16px;
+}
+
+.admin-grid--secondary {
+  grid-template-columns: minmax(320px, 0.95fr) minmax(0, 1.55fr);
+  margin-top: 16px;
+}
+
+.admin-detail-lists {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.timeline-card--clickable {
+  cursor: pointer;
+}
+
+.timeline-card--clickable:hover {
+  border-color: rgba(59, 130, 246, 0.18);
+  background: rgba(255, 255, 255, 0.035);
+}
+
 @media (max-width: 1180px) {
   .metrics-grid,
   .metrics-grid--admin {
@@ -669,7 +693,8 @@ textarea:focus {
   .actions-grid,
   .split-layout,
   .hero,
-  .admin-grid {
+  .admin-grid,
+  .admin-detail-lists {
     grid-template-columns: 1fr;
   }
 
