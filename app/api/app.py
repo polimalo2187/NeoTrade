@@ -10,10 +10,17 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app.config import API_PREFIX, ADMIN_TELEGRAM_IDS, ENABLE_API_SERVER, MINI_APP_URL
+from app.config import (
+    API_PREFIX,
+    ADMIN_TELEGRAM_IDS,
+    ENABLE_API_SERVER,
+    MINI_APP_URL,
+    PAYMENT_ASSET,
+    REFERRAL_PAYOUT_MIN_USDT,
+)
 from app.mensajes import mensaje_fee
-from app.models import OperacionModel, PaymentInvoiceModel, UsuarioModel
-from app.services.user_trading_service import TradingToggleResult, UserTradingService
+from app.models import OperacionModel, PaymentInvoiceModel, ReferralPayoutRequestModel, UsuarioModel
+from app.services.user_trading_service import ReferralPayoutResult, TradingToggleResult, UserTradingService
 from .security import (
     MiniAppSessionManager,
     SessionTokenError,
@@ -51,8 +58,12 @@ class ApiCredentialsRequest(BaseModel):
     api_secret: str
 
 
-class FeeReportRequest(BaseModel):
-    report_text: str = Field(..., min_length=3, max_length=4000)
+class ReferralCoinWUidRequest(BaseModel):
+    coinw_uid: str = Field(..., min_length=4, max_length=32)
+
+
+class AdminReferralPayoutDecisionRequest(BaseModel):
+    reason: Optional[str] = Field(default=None, max_length=500)
 
 
 class AuthenticatedUser(BaseModel):
@@ -233,6 +244,30 @@ def create_api_app() -> FastAPI:
     def me_referrals(current_user: AuthenticatedUser = Depends(get_current_user)):
         return _json(service.get_referral_summary(current_user.telegram_id))
 
+    @app.post(f"{API_PREFIX}/me/referrals/coinw-uid")
+    def me_referrals_coinw_uid(payload: ReferralCoinWUidRequest, current_user: AuthenticatedUser = Depends(get_current_user)):
+        result = service.save_referral_coinw_uid(current_user.telegram_id, payload.coinw_uid)
+        if result.status == "user_not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
+        if result.status == "invalid_coinw_uid":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result.reason or "UID inválido")
+        return _json({"status": result.status, "user": service.serialize_user_public(result.user or {})})
+
+    @app.post(f"{API_PREFIX}/me/referrals/payout-request")
+    def me_referrals_payout_request(current_user: AuthenticatedUser = Depends(get_current_user)):
+        result = service.request_referral_payout(current_user.telegram_id)
+        if result.status == "user_not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
+        if result.status == "payout_request_blocked":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=result.reason or "No se puede solicitar payout")
+        return _json(
+            {
+                "status": result.status,
+                "request": result.request,
+                "user": service.serialize_user_public(result.user or {}),
+            }
+        )
+
     @app.get(f"{API_PREFIX}/me/fee")
     def me_fee(current_user: AuthenticatedUser = Depends(get_current_user)):
         user = service.get_user(current_user.telegram_id)
@@ -323,6 +358,7 @@ def create_api_app() -> FastAPI:
         bloqueados_fee = [u for u in usuarios if u.get("trading_pause_reason") == "fee_due"]
         capital_total = sum(float(u.get("capital_total", 0) or 0) for u in usuarios)
         pending_invoices = PaymentInvoiceModel.obtener_facturas({"status": {"$in": ["pending", "reported"]}}, limit=20)
+        pending_referral_payouts = ReferralPayoutRequestModel.obtener_requests({"status": {"$in": ["requested", "processing"]}}, limit=20)
         recent_operations = OperacionModel.obtener_operaciones({}, limit=10)
         return _json(
             {
@@ -334,8 +370,28 @@ def create_api_app() -> FastAPI:
                     "capital_total_estimated": capital_total,
                 },
                 "pending_invoices": pending_invoices,
+                "pending_referral_payouts": pending_referral_payouts,
                 "recent_operations": recent_operations,
             }
         )
+
+    @app.get(f"{API_PREFIX}/admin/referral-payouts")
+    def admin_referral_payouts(current_admin: AuthenticatedUser = Depends(get_admin_user)):
+        requests = ReferralPayoutRequestModel.obtener_requests({}, limit=100)
+        return _json({"requests": requests})
+
+    @app.post(f"{API_PREFIX}/admin/referral-payouts/{{request_id}}/confirm")
+    def admin_referral_payout_confirm(request_id: str, current_admin: AuthenticatedUser = Depends(get_admin_user)):
+        result = service.admin_confirm_referral_payout(request_id, current_admin.telegram_id)
+        if result.status == "request_not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Solicitud no encontrada")
+        return _json({"status": result.status, "request": result.request, "user": service.serialize_user_public(result.user or {})})
+
+    @app.post(f"{API_PREFIX}/admin/referral-payouts/{{request_id}}/reject")
+    def admin_referral_payout_reject(request_id: str, payload: AdminReferralPayoutDecisionRequest, current_admin: AuthenticatedUser = Depends(get_admin_user)):
+        result = service.admin_reject_referral_payout(request_id, current_admin.telegram_id, payload.reason)
+        if result.status == "request_not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Solicitud no encontrada")
+        return _json({"status": result.status, "request": result.request, "user": service.serialize_user_public(result.user or {})})
 
     return app
