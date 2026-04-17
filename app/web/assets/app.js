@@ -112,7 +112,14 @@ const els = {
   adminDetailReferralAvailable: document.getElementById('adminDetailReferralAvailable'),
   adminDetailCoinwUid: document.getElementById('adminDetailCoinwUid'),
   adminDetailPayoutStatus: document.getElementById('adminDetailPayoutStatus'),
+  adminDetailEngineError: document.getElementById('adminDetailEngineError'),
   adminDetailUpdatedAt: document.getElementById('adminDetailUpdatedAt'),
+  adminActionRefreshCapital: document.getElementById('adminActionRefreshCapital'),
+  adminActionActivateBot: document.getElementById('adminActionActivateBot'),
+  adminActionPauseTrading: document.getElementById('adminActionPauseTrading'),
+  adminActionResumeTrading: document.getElementById('adminActionResumeTrading'),
+  adminActionDeactivateBot: document.getElementById('adminActionDeactivateBot'),
+  adminUserActionHint: document.getElementById('adminUserActionHint'),
   adminDetailReferredUsers: document.getElementById('adminDetailReferredUsers'),
   adminDetailPayoutHistory: document.getElementById('adminDetailPayoutHistory'),
   adminDetailOperations: document.getElementById('adminDetailOperations'),
@@ -181,6 +188,14 @@ function resetAdminUserDetail(message = 'Busca un usuario o ábrelo desde una ta
   if (els.adminUserDetailContent) {
     els.adminUserDetailContent.classList.add('hidden');
   }
+  if (els.adminUserActionHint) {
+    els.adminUserActionHint.textContent = 'Controles administrativos directos sobre el usuario seleccionado.';
+  }
+  [els.adminActionRefreshCapital, els.adminActionActivateBot, els.adminActionPauseTrading, els.adminActionResumeTrading, els.adminActionDeactivateBot]
+    .filter(Boolean)
+    .forEach((button) => {
+      button.disabled = true;
+    });
 }
 
 
@@ -717,7 +732,17 @@ function renderAdminUserDetail(payload) {
   els.adminDetailPayoutStatus.textContent = payload?.active_payout_request
     ? `${textOrDash(payload.active_payout_request.status, 'requested')} · ${formatMoney(asNumber(payload.active_payout_request.amount_requested, 0), asset)}`
     : 'No';
+  if (els.adminDetailEngineError) els.adminDetailEngineError.textContent = textOrDash(user.last_engine_error || 'Sin error reciente', 'Sin error reciente');
   els.adminDetailUpdatedAt.textContent = formatDate(user.updated_at);
+
+  if (els.adminUserActionHint) {
+    els.adminUserActionHint.textContent = 'Acciones directas sobre el usuario seleccionado. Los cambios se ejecutan al instante en backend.';
+  }
+  if (els.adminActionRefreshCapital) els.adminActionRefreshCapital.disabled = !user.has_api_credentials;
+  if (els.adminActionActivateBot) els.adminActionActivateBot.disabled = Boolean(user.bot_activo) || !user.has_api_credentials;
+  if (els.adminActionPauseTrading) els.adminActionPauseTrading.disabled = !Boolean(user.bot_activo) || !Boolean(user.trading_enabled) || user.trading_pause_reason === 'fee_due';
+  if (els.adminActionResumeTrading) els.adminActionResumeTrading.disabled = !Boolean(user.bot_activo) || (Boolean(user.trading_enabled) && !user.trading_pause_reason) || user.trading_pause_reason === 'fee_due';
+  if (els.adminActionDeactivateBot) els.adminActionDeactivateBot.disabled = !Boolean(user.bot_activo);
 
   renderList(els.adminDetailReferredUsers, payload?.referred_users || [], referredUserCard);
   renderList(els.adminDetailPayoutHistory, payload?.recent_payout_requests || [], adminPayoutHistoryCard);
@@ -834,6 +859,85 @@ async function rejectReferralPayout(requestId) {
     await loadDashboard();
   } catch (error) {
     showNotice('error', error.message);
+  }
+}
+
+async function runAdminUserAction(actionKey) {
+  const telegramId = state.adminSelectedUserDetail?.user?.telegram_id;
+  if (!telegramId) {
+    showNotice('error', 'Selecciona primero un usuario.');
+    return;
+  }
+
+  const actionMap = {
+    refresh_capital: {
+      endpoint: `${apiPrefix()}/admin/users/${telegramId}/capital/refresh`,
+      method: 'POST',
+      success: 'Capital actualizado correctamente.',
+      confirm: null,
+    },
+    activate_bot: {
+      endpoint: `${apiPrefix()}/admin/users/${telegramId}/bot/activate`,
+      method: 'POST',
+      success: 'Bot activado correctamente.',
+      confirm: '¿Activar el bot de este usuario desde administración?',
+    },
+    pause_trading: {
+      endpoint: `${apiPrefix()}/admin/users/${telegramId}/trading/pause`,
+      method: 'POST',
+      success: 'Trading pausado correctamente.',
+      confirm: '¿Pausar el trading de este usuario?',
+    },
+    resume_trading: {
+      endpoint: `${apiPrefix()}/admin/users/${telegramId}/trading/resume`,
+      method: 'POST',
+      success: 'Trading reanudado correctamente.',
+      confirm: '¿Reanudar el trading de este usuario?',
+    },
+    deactivate_bot: {
+      endpoint: `${apiPrefix()}/admin/users/${telegramId}/bot/deactivate`,
+      method: 'POST',
+      success: 'Bot detenido correctamente.',
+      confirm: '¿Detener el bot de este usuario?',
+    },
+  };
+
+  const action = actionMap[actionKey];
+  if (!action) return;
+  if (action.confirm && !window.confirm(action.confirm)) return;
+
+  clearNotice();
+  const buttons = [els.adminActionRefreshCapital, els.adminActionActivateBot, els.adminActionPauseTrading, els.adminActionResumeTrading, els.adminActionDeactivateBot].filter(Boolean);
+  buttons.forEach((button) => { button.disabled = true; });
+
+  try {
+    await fetchJson(action.endpoint, { method: action.method });
+    showNotice('success', action.success);
+    await loadAdminPanel();
+    await loadAdminUserDetail(telegramId);
+  } catch (error) {
+    showNotice('error', error.message || 'No se pudo ejecutar la acción administrativa.');
+    if (state.adminSelectedUserDetail) {
+      renderAdminUserDetail(state.adminSelectedUserDetail);
+    }
+  }
+}
+
+function bindAdminActionButtons() {
+  if (els.adminActionRefreshCapital) {
+    els.adminActionRefreshCapital.addEventListener('click', () => runAdminUserAction('refresh_capital'));
+  }
+  if (els.adminActionActivateBot) {
+    els.adminActionActivateBot.addEventListener('click', () => runAdminUserAction('activate_bot'));
+  }
+  if (els.adminActionPauseTrading) {
+    els.adminActionPauseTrading.addEventListener('click', () => runAdminUserAction('pause_trading'));
+  }
+  if (els.adminActionResumeTrading) {
+    els.adminActionResumeTrading.addEventListener('click', () => runAdminUserAction('resume_trading'));
+  }
+  if (els.adminActionDeactivateBot) {
+    els.adminActionDeactivateBot.addEventListener('click', () => runAdminUserAction('deactivate_bot'));
   }
 }
 
@@ -1186,6 +1290,7 @@ function setupTabs() {
 async function bootstrap() {
   setupTabs();
   bindCredentialFieldHelpers();
+  bindAdminActionButtons();
   setButtonsDisabled(true);
   try {
     await loadAppInfo();
