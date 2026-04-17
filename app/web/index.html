@@ -385,13 +385,6 @@
             <div class="admin-grid">
               <article class="surface-inset account-section">
                 <div class="account-section__header">
-                  <p class="eyebrow">Usuarios recientes</p>
-                </div>
-                <div id="adminRecentUsersList" class="list-panel"></div>
-              </article>
-
-              <article class="surface-inset account-section">
-                <div class="account-section__header">
                   <p class="eyebrow">Payouts de referidos</p>
                 </div>
                 <div id="adminPendingPayoutsList" class="list-panel"></div>
@@ -400,8 +393,24 @@
               <article class="surface-inset account-section">
                 <div class="account-section__header">
                   <p class="eyebrow">Salud operativa</p>
+                  <h4>Resumen real del sistema</h4>
+                  <p class="helper-text helper-text--compact">Estado actual del engine, actividad reciente y puntos de atención del sistema.</p>
                 </div>
-                <div id="adminEngineIssuesList" class="list-panel"></div>
+                <div class="status-list status-list--section">
+                  <div><span>Estado general</span><strong id="adminHealthSystemStatus">Operativo</strong></div>
+                  <div><span>Errores recientes engine</span><strong id="adminHealthErrorCount">0</strong></div>
+                  <div><span>Operaciones recientes</span><strong id="adminHealthOperationsCount">0</strong></div>
+                  <div><span>Usuarios con API OK</span><strong id="adminHealthUsersWithApi">0</strong></div>
+                  <div><span>Usuarios bloqueados por fee</span><strong id="adminHealthFeeBlocked">0</strong></div>
+                  <div><span>Posiciones activas</span><strong id="adminHealthActivePositions">0</strong></div>
+                  <div><span>Última operación</span><strong id="adminHealthLastOperation">Sin registro</strong></div>
+                  <div><span>Última actividad usuario</span><strong id="adminHealthLastUserActivity">Sin registro</strong></div>
+                </div>
+                <div class="divider"></div>
+                <div>
+                  <p class="eyebrow">Incidencias recientes</p>
+                  <div id="adminEngineIssuesList" class="list-panel"></div>
+                </div>
               </article>
             </div>
 
@@ -422,7 +431,7 @@
                     <button id="adminUserSearchClearButton" type="button" class="button button--ghost">Limpiar</button>
                   </div>
                 </form>
-                <div id="adminUserSearchHelp" class="helper-text helper-text--compact">También puedes abrir detalles desde usuarios recientes, payouts o errores del engine.</div>
+                <div id="adminUserSearchHelp" class="helper-text helper-text--compact">También puedes abrir detalles desde payouts o incidencias del engine.</div>
                 <div id="adminUserSearchResults" class="list-panel list-panel--spaced"></div>
               </article>
 
