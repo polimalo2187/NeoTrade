@@ -188,49 +188,67 @@
             <div class="panel__header">
               <div>
                 <p class="eyebrow">Cuenta</p>
-                <h3>Referidos y salud</h3>
+                <h3>Sesión, referidos y salud</h3>
               </div>
             </div>
-            <div class="status-list status-list--spaced">
-              <div>
-                <span>Ganancia diaria</span>
-                <strong id="detailReferralDaily">--</strong>
-              </div>
-              <div>
-                <span>Ganancia acumulada</span>
-                <strong id="detailReferralTotal">--</strong>
-              </div>
-              <div>
-                <span>Posición activa</span>
-                <strong id="detailActivePosition">--</strong>
-              </div>
-              <div>
-                <span>Telegram ID</span>
-                <strong id="detailTelegramId">--</strong>
-              </div>
-              <div>
-                <span>Método fee</span>
-                <strong id="detailPaymentMethod">--</strong>
-              </div>
-              <div>
-                <span>Umbral fee</span>
-                <strong id="detailFeeThreshold">--</strong>
-              </div>
-              <div>
-                <span>Última actualización</span>
-                <strong id="detailUpdatedAt">--</strong>
-              </div>
-            </div>
-            <div class="button-row button-row--sidebar">
-              <button id="copyReferralCodeButton" class="button button--ghost" type="button">Copiar enlace</button>
-              <button id="copyFeeInvoiceButton" class="button button--ghost" type="button">Copiar factura</button>
-            </div>
-            <div class="divider"></div>
-            <div class="profile-card">
+
+            <div class="profile-card profile-card--session surface-inset">
               <div>
                 <p class="eyebrow">Sesión</p>
                 <h3 id="profileName">No autenticado</h3>
                 <p id="profileMeta">Abre la Mini App desde Telegram para cargar tu cuenta.</p>
+              </div>
+            </div>
+
+            <div class="account-section surface-inset">
+              <div class="account-section__header">
+                <p class="eyebrow">Referidos</p>
+              </div>
+              <div class="status-list status-list--section">
+                <div>
+                  <span>Ganancia diaria</span>
+                  <strong id="detailReferralDaily">--</strong>
+                </div>
+                <div>
+                  <span>Ganancia acumulada</span>
+                  <strong id="detailReferralTotal">--</strong>
+                </div>
+                <div>
+                  <span>Enlace de invitación</span>
+                  <strong id="detailReferralLink">--</strong>
+                </div>
+              </div>
+              <div class="button-row button-row--sidebar">
+                <button id="copyReferralCodeButton" class="button button--ghost" type="button">Copiar enlace</button>
+                <button id="copyFeeInvoiceButton" class="button button--ghost" type="button">Copiar factura</button>
+              </div>
+            </div>
+
+            <div class="account-section surface-inset">
+              <div class="account-section__header">
+                <p class="eyebrow">Salud operativa</p>
+              </div>
+              <div class="status-list status-list--section">
+                <div>
+                  <span>Posición activa</span>
+                  <strong id="detailActivePosition">--</strong>
+                </div>
+                <div>
+                  <span>Telegram ID</span>
+                  <strong id="detailTelegramId">--</strong>
+                </div>
+                <div>
+                  <span>Método fee</span>
+                  <strong id="detailPaymentMethod">--</strong>
+                </div>
+                <div>
+                  <span>Umbral fee</span>
+                  <strong id="detailFeeThreshold">--</strong>
+                </div>
+                <div>
+                  <span>Última actualización</span>
+                  <strong id="detailUpdatedAt">--</strong>
+                </div>
               </div>
             </div>
           </article>
