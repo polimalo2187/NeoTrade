@@ -103,7 +103,9 @@
             </div>
             <div class="button-row">
               <button id="activateButton" class="button button--primary" type="button">Activar bot</button>
-              <button id="deactivateButton" class="button button--secondary" type="button">Desactivar bot</button>
+              <button id="pauseTradingButton" class="button button--secondary" type="button">Pausar trading</button>
+              <button id="resumeTradingButton" class="button button--secondary" type="button">Reanudar trading</button>
+              <button id="deactivateButton" class="button button--ghost" type="button">Detener bot</button>
               <button id="refreshCapitalButton" class="button button--ghost" type="button">Refrescar capital</button>
             </div>
             <div class="status-list">
@@ -203,9 +205,25 @@
                 <strong id="detailActivePosition">--</strong>
               </div>
               <div>
+                <span>Telegram ID</span>
+                <strong id="detailTelegramId">--</strong>
+              </div>
+              <div>
+                <span>Método fee</span>
+                <strong id="detailPaymentMethod">--</strong>
+              </div>
+              <div>
+                <span>Umbral fee</span>
+                <strong id="detailFeeThreshold">--</strong>
+              </div>
+              <div>
                 <span>Última actualización</span>
                 <strong id="detailUpdatedAt">--</strong>
               </div>
+            </div>
+            <div class="button-row button-row--sidebar">
+              <button id="copyReferralCodeButton" class="button button--ghost" type="button">Copiar código</button>
+              <button id="copyFeeInvoiceButton" class="button button--ghost" type="button">Copiar factura</button>
             </div>
             <div class="divider"></div>
             <div class="profile-card">
