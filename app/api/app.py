@@ -428,6 +428,29 @@ def create_api_app() -> FastAPI:
                 }
             enriched_payouts.append(item)
 
+        latest_user_activity_at = usuarios_ordenados[0].get("updated_at") if usuarios_ordenados else None
+        latest_operation_at = None
+        if recent_operations:
+            latest_operation_at = (
+                recent_operations[0].get("updated_at")
+                or recent_operations[0].get("closed_at")
+                or recent_operations[0].get("created_at")
+            )
+
+        health_snapshot = {
+            "engine_status": "issues_detected" if recent_engine_errors else "stable",
+            "recent_engine_errors_count": len(recent_engine_errors),
+            "recent_operations_count": len(recent_operations),
+            "users_with_credentials": len(con_credenciales),
+            "bots_active": len(activos),
+            "active_positions": len(con_posicion_activa),
+            "blocked_fee_users": len(bloqueados_fee),
+            "pending_invoices_count": len(pending_invoices),
+            "pending_referral_payouts_count": len(enriched_payouts),
+            "latest_user_activity_at": latest_user_activity_at,
+            "latest_operation_at": latest_operation_at,
+        }
+
         return _json(
             {
                 "generated_at": datetime.utcnow(),
@@ -444,10 +467,7 @@ def create_api_app() -> FastAPI:
                     "pending_invoices_count": len(pending_invoices),
                     "pending_referral_payouts_count": len(enriched_payouts),
                 },
-                "health": {
-                    "recent_engine_errors_count": len(recent_engine_errors),
-                    "recent_operations_count": len(recent_operations),
-                },
+                "health": health_snapshot,
                 "recent_users": recent_users,
                 "recent_engine_errors": recent_engine_errors,
                 "pending_invoices": pending_invoices,
