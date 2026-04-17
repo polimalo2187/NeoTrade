@@ -33,7 +33,8 @@ class Bot:
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         usuario_id = update.effective_user.id
         nombre_usuario = update.effective_user.first_name or "usuario"
-        session = self.user_service.get_or_create_user(usuario_id, nombre_usuario)
+        referral_code = context.args[0] if context.args else None
+        session = self.user_service.get_or_create_user(usuario_id, nombre_usuario, referral_code=referral_code)
         usuario_data = session.user
 
         if session.created:
@@ -41,6 +42,8 @@ class Bot:
                 f"¡Hola {nombre_usuario}! 🤖\n"
                 "Este bot opera CoinW Spot de forma automática y ya queda preparado para migrar la operativa hacia la Mini App."
             )
+            if session.referral_linked:
+                mensaje_bienvenida += "\n🔗 Referido vinculado correctamente."
         else:
             mensaje_bienvenida = f"¡Hola nuevamente {nombre_usuario}! 🤖"
             if usuario_data.get("trading_pause_reason") == "fee_due":
