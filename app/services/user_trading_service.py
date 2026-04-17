@@ -1,7 +1,7 @@
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 from app.config import (
@@ -318,6 +318,134 @@ class UserTradingService:
 
     def get_recent_trade_events(self, telegram_id: int, limit: int = 20):
         return TradeEventModel.obtener_eventos({"telegram_id": telegram_id}, limit=limit)
+
+    @staticmethod
+    def _user_sort_datetime(usuario: Dict[str, Any]) -> datetime:
+        return usuario.get("updated_at") or usuario.get("created_at") or datetime(1970, 1, 1)
+
+    def _serialize_admin_user_summary(self, usuario: Dict[str, Any]) -> Dict[str, Any]:
+        public = self.serialize_user_public(usuario)
+        telegram_id = int(public.get("telegram_id") or 0)
+        referidos = ReferidoModel.obtener_referidos({"referidor_id": telegram_id}) if telegram_id else []
+        active_payout = self.get_active_referral_payout_request(telegram_id) if telegram_id else None
+        return {
+            "telegram_id": public.get("telegram_id"),
+            "nombre": public.get("nombre"),
+            "bot_activo": public.get("bot_activo"),
+            "trading_enabled": public.get("trading_enabled"),
+            "trading_pause_reason": public.get("trading_pause_reason"),
+            "fee_status": public.get("fee_status"),
+            "has_api_credentials": public.get("has_api_credentials"),
+            "capital_total": public.get("capital_total"),
+            "capital_activo": public.get("capital_activo"),
+            "active_position": bool(public.get("active_position")),
+            "last_engine_error": public.get("last_engine_error"),
+            "referral_total": len(referidos),
+            "referral_available_balance": public.get("referral_available_balance"),
+            "referral_coinw_uid": public.get("referral_coinw_uid"),
+            "has_active_payout_request": bool(active_payout),
+            "updated_at": public.get("updated_at"),
+            "created_at": public.get("created_at"),
+        }
+
+    def admin_search_users(self, query: Optional[str], limit: int = 20) -> List[Dict[str, Any]]:
+        users = UsuarioModel.obtener_todos_usuarios()
+        limit = max(1, min(int(limit or 20), 50))
+        needle = (query or "").strip()
+        if not needle:
+            ordered = sorted(users, key=self._user_sort_datetime, reverse=True)[:limit]
+            return [self._serialize_admin_user_summary(item) for item in ordered]
+
+        lowered = needle.lower()
+        matches = []
+        for usuario in users:
+            telegram_id = str(usuario.get("telegram_id") or "")
+            nombre = str(usuario.get("nombre") or "")
+            referral_code = str(usuario.get("codigo_referido") or "")
+            referral_uid = str(usuario.get("referral_coinw_uid") or "")
+            referred_by = str(usuario.get("referred_by_code") or "")
+            score = None
+            if telegram_id == needle:
+                score = 120
+            elif referral_code == needle:
+                score = 110
+            elif referral_uid == needle:
+                score = 100
+            elif telegram_id.startswith(needle):
+                score = 90
+            elif lowered in nombre.lower():
+                score = 80
+            elif needle in referral_code or needle in referral_uid or needle in referred_by:
+                score = 70
+
+            if score is None:
+                continue
+            matches.append((score, self._user_sort_datetime(usuario), usuario))
+
+        matches.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return [self._serialize_admin_user_summary(item[2]) for item in matches[:limit]]
+
+    def admin_get_user_detail(self, telegram_id: int) -> Optional[Dict[str, Any]]:
+        usuario = self.get_user(telegram_id)
+        if not usuario:
+            return None
+
+        public = self.serialize_user_public(usuario)
+        referrals = self.get_referral_summary(telegram_id)
+        fee_invoice = self.get_fee_invoice(telegram_id)
+        active_payout = self.get_active_referral_payout_request(telegram_id)
+        referrer = None
+        if public.get("referidor_id"):
+            parent = self.get_user(int(public.get("referidor_id")))
+            if parent:
+                referrer = {
+                    "telegram_id": parent.get("telegram_id"),
+                    "nombre": parent.get("nombre"),
+                    "codigo_referido": parent.get("codigo_referido"),
+                }
+
+        referred_users = []
+        for relation in ReferidoModel.obtener_referidos({"referidor_id": telegram_id})[:10]:
+            invited_user = self.get_user(int(relation.get("referido_id")))
+            referred_users.append({
+                "telegram_id": relation.get("referido_id"),
+                "nombre": invited_user.get("nombre") if invited_user else f"Usuario {relation.get('referido_id')}",
+                "status": relation.get("status"),
+                "ganancia_diaria": float(relation.get("ganancia_diaria", 0) or 0),
+                "ganancia_acumulada": float(relation.get("ganancia_acumulada", 0) or 0),
+                "total_disponible": float(relation.get("total_disponible", 0) or 0),
+                "total_pagado": float(relation.get("total_pagado", 0) or 0),
+                "last_commission_at": relation.get("last_commission_at"),
+                "fecha_registro": relation.get("fecha_registro"),
+                "bot_activo": bool(invited_user.get("bot_activo")) if invited_user else False,
+                "has_api_credentials": bool(invited_user.get("api_key") and invited_user.get("api_secret")) if invited_user else False,
+            })
+
+        payout_requests = []
+        for request in ReferralPayoutRequestModel.obtener_requests({"referidor_id": telegram_id}, limit=10):
+            payout_requests.append({
+                "request_id": request.get("request_id"),
+                "status": request.get("status"),
+                "amount_requested": float(request.get("amount_requested") or request.get("amount_reserved") or 0),
+                "asset": request.get("asset") or PAYMENT_ASSET,
+                "coinw_uid": request.get("coinw_uid"),
+                "created_at": request.get("created_at"),
+                "processed_at": request.get("processed_at"),
+                "admin_note": request.get("admin_note"),
+            })
+
+        return {
+            "user": public,
+            "referrals": referrals,
+            "referrer": referrer,
+            "fee_invoice": fee_invoice,
+            "active_payout_request": active_payout,
+            "recent_payout_requests": payout_requests,
+            "referred_users": referred_users,
+            "recent_operations": self.get_recent_operations(telegram_id, limit=5),
+            "recent_trade_states": self.get_recent_trade_states(telegram_id, limit=5),
+            "recent_trade_events": self.get_recent_trade_events(telegram_id, limit=5),
+        }
 
     def begin_api_key_capture(self, telegram_id: int) -> None:
         UsuarioModel.actualizar_usuario({"telegram_id": telegram_id}, {"estado": "esperando_api_key"})
