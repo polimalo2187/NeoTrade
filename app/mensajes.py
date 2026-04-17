@@ -67,10 +67,13 @@ def mensaje_referidos(usuario: Dict) -> str:
     enlace = f"https://t.me/TradeNeo_bot?start={usuario.get('codigo_referido', usuario.get('telegram_id'))}"
     return (
         f"🔗 Tu enlace único de referido:\n{enlace}\n\n"
+        f"👥 Total de referidos: {int(usuario.get('total_referidos', 0) or 0)}\n"
         f"⏳ Saldo pendiente por cobrar: {float(usuario.get('referral_pending_balance', 0) or 0):.2f} {PAYMENT_ASSET}\n"
+        f"🏦 Saldo disponible para pago: {float(usuario.get('referral_available_balance', 0) or 0):.2f} {PAYMENT_ASSET}\n"
+        f"🕒 Saldo en proceso: {float(usuario.get('referral_reserved_balance', 0) or 0):.2f} {PAYMENT_ASSET}\n"
+        f"✅ Total pagado: {float(usuario.get('referral_paid_total', 0) or 0):.2f} {PAYMENT_ASSET}\n"
         f"💵 Ganancia diaria referidos: {float(usuario.get('ganancia_diaria_referidos', 0) or 0):.2f} {PAYMENT_ASSET}\n"
-        f"💰 Ganancia acumulada referidos: {float(usuario.get('ganancia_acumulada_referidos', 0) or 0):.2f} {PAYMENT_ASSET}\n"
-        f"🏦 Saldo disponible para pago: {float(usuario.get('referral_available_balance', 0) or 0):.2f} {PAYMENT_ASSET}"
+        f"💰 Ganancia acumulada referidos: {float(usuario.get('ganancia_acumulada_referidos', 0) or 0):.2f} {PAYMENT_ASSET}"
     )
 
 
