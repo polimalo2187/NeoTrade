@@ -264,7 +264,7 @@ function renderReadonlyPreview() {
   els.metricFeeDue.textContent = '--';
   els.metricFeeStatus.textContent = 'Sin autenticación';
   els.metricReferralsCount.textContent = '--';
-  els.metricReferralCode.textContent = 'Código --';
+  els.metricReferralCode.textContent = 'Enlace --';
   els.metricCredentials.textContent = 'Pendiente';
   els.metricMaskedKey.textContent = 'Abre desde Telegram';
   els.detailTradingStatus.textContent = 'No autenticado';
@@ -415,7 +415,7 @@ function updateDashboardView(payload) {
   els.metricFeeDue.textContent = formatMoney(user.fee_due_total, user.payment_asset || 'USDT');
   els.metricFeeStatus.textContent = `Estado fee: ${textOrDash(user.fee_status)}`;
   els.metricReferralsCount.textContent = textOrDash(referrals.referidos_activos);
-  els.metricReferralCode.textContent = `Código ${textOrDash(referrals.codigo_referido)}`;
+  els.metricReferralCode.textContent = referrals.enlace_referido ? 'Enlace listo para compartir' : 'Enlace --';
   els.metricCredentials.textContent = user.has_api_credentials ? 'Configuradas' : 'Pendientes';
   els.metricMaskedKey.textContent = user.api_key_masked || 'Clave no cargada';
 
@@ -451,7 +451,7 @@ function updateDashboardView(payload) {
   els.feeReportInput.disabled = !invoice;
   els.pauseTradingButton.disabled = !user.bot_activo || user.trading_pause_reason === 'fee_due' || (!user.trading_enabled && user.trading_pause_reason === 'manual_pause');
   els.resumeTradingButton.disabled = !user.bot_activo || user.trading_pause_reason === 'fee_due' || user.trading_enabled;
-  els.copyReferralCodeButton.disabled = !referrals.codigo_referido;
+  els.copyReferralCodeButton.disabled = !referrals.enlace_referido;
   els.copyFeeInvoiceButton.disabled = !invoice;
 
   if (user.bot_activo) {
@@ -568,12 +568,12 @@ async function resumeTrading() {
   }
 }
 
-async function copyReferralCode() {
+async function copyReferralLink() {
   clearNotice();
   try {
-    const code = state.dashboard?.referrals?.codigo_referido;
-    await copyToClipboard(code);
-    showNotice('success', 'Código de referido copiado.');
+    const link = state.dashboard?.referrals?.enlace_referido;
+    await copyToClipboard(link);
+    showNotice('success', 'Enlace de referido copiado.');
   } catch (error) {
     showNotice('error', error.message);
   }
@@ -674,7 +674,7 @@ els.pauseTradingButton.addEventListener('click', pauseTrading);
 els.resumeTradingButton.addEventListener('click', resumeTrading);
 els.deactivateButton.addEventListener('click', deactivateBot);
 els.refreshCapitalButton.addEventListener('click', refreshCapital);
-els.copyReferralCodeButton.addEventListener('click', copyReferralCode);
+els.copyReferralCodeButton.addEventListener('click', copyReferralLink);
 els.copyFeeInvoiceButton.addEventListener('click', copyFeeInvoice);
 els.refreshButton.addEventListener('click', () => loadDashboard({ refreshCapital: false }).catch((error) => showNotice('error', error.message)));
 
