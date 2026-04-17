@@ -206,12 +206,24 @@
               </div>
               <div class="status-list status-list--section">
                 <div>
+                  <span>Total de referidos</span>
+                  <strong id="detailReferralCount">--</strong>
+                </div>
+                <div>
                   <span>Ganancia diaria</span>
                   <strong id="detailReferralDaily">--</strong>
                 </div>
                 <div>
                   <span>Ganancia acumulada</span>
                   <strong id="detailReferralTotal">--</strong>
+                </div>
+                <div>
+                  <span>Saldo disponible</span>
+                  <strong id="detailReferralAvailable">--</strong>
+                </div>
+                <div>
+                  <span>Saldo en proceso</span>
+                  <strong id="detailReferralReserved">--</strong>
                 </div>
                 <div>
                   <span>Enlace de invitación</span>
@@ -222,6 +234,37 @@
                 <button id="copyReferralCodeButton" class="button button--ghost" type="button">Copiar enlace</button>
                 <button id="copyFeeInvoiceButton" class="button button--ghost" type="button">Copiar factura</button>
               </div>
+            </div>
+
+            <div class="account-section surface-inset">
+              <div class="account-section__header">
+                <p class="eyebrow">Payout referidos</p>
+              </div>
+              <div class="status-list status-list--section">
+                <div>
+                  <span>UID CoinW</span>
+                  <strong id="detailReferralUid">--</strong>
+                </div>
+                <div>
+                  <span>Mínimo payout</span>
+                  <strong id="detailReferralMinimum">--</strong>
+                </div>
+                <div>
+                  <span>Solicitud activa</span>
+                  <strong id="detailReferralRequest">--</strong>
+                </div>
+              </div>
+              <form id="referralPayoutForm" class="form-stack form-stack--compact">
+                <label>
+                  <span>CoinW UID de cobro</span>
+                  <input id="coinwUidInput" name="coinwUid" type="text" inputmode="numeric" autocomplete="off" placeholder="Guarda aquí tu UID de CoinW" />
+                </label>
+                <div class="button-row button-row--sidebar">
+                  <button id="saveCoinwUidButton" class="button button--secondary" type="submit">Guardar UID</button>
+                  <button id="requestReferralPayoutButton" class="button button--primary" type="button">Solicitar pago</button>
+                </div>
+              </form>
+              <p id="referralPayoutHint" class="helper-text">Debes guardar tu UID CoinW y tener saldo disponible suficiente para solicitar payout.</p>
             </div>
 
             <div class="account-section surface-inset">
