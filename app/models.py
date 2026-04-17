@@ -3,7 +3,14 @@ from typing import Any, Dict, List, Optional
 
 from pymongo import DESCENDING
 
-from app.config import FEE_ADMIN_PORC, FEE_SETTLEMENT_THRESHOLD, PAYMENT_ASSET, PAYMENT_METHOD
+from app.config import (
+    FEE_ADMIN_PORC,
+    FEE_SETTLEMENT_THRESHOLD,
+    PAYMENT_ASSET,
+    PAYMENT_METHOD,
+    REFERRAL_PAYOUT_COOLDOWN_HOURS,
+    REFERRAL_PAYOUT_MIN_USDT,
+)
 from app.db import Database
 
 
@@ -35,7 +42,11 @@ class UsuarioModel:
             "ganancia_acumulada_referidos": 0.0,
             "referral_pending_balance": 0.0,
             "referral_available_balance": 0.0,
+            "referral_reserved_balance": 0.0,
             "referral_paid_total": 0.0,
+            "referral_coinw_uid": None,
+            "referral_coinw_uid_updated_at": None,
+            "referral_last_payout_requested_at": None,
             "estado": None,
             "api_key": None,
             "api_secret": None,
@@ -213,6 +224,49 @@ class UsuarioModel:
                 "referral_available_balance": float(monto),
                 "ganancia_diaria_referidos": float(monto),
                 "ganancia_acumulada_referidos": float(monto),
+            },
+        )
+
+    @staticmethod
+    def guardar_coinw_uid_referidos(telegram_id: int, coinw_uid: str):
+        return UsuarioModel.actualizar_usuario(
+            {"telegram_id": telegram_id},
+            {
+                "referral_coinw_uid": str(coinw_uid),
+                "referral_coinw_uid_updated_at": datetime.utcnow(),
+            },
+        )
+
+    @staticmethod
+    def reservar_referral_para_payout(referidor_id: int, monto: float):
+        return db.incrementar_documento(
+            UsuarioModel.COLECCION,
+            {"telegram_id": referidor_id},
+            {
+                "referral_available_balance": -float(monto),
+                "referral_reserved_balance": float(monto),
+            },
+        )
+
+    @staticmethod
+    def revertir_reserva_referral(referidor_id: int, monto: float):
+        return db.incrementar_documento(
+            UsuarioModel.COLECCION,
+            {"telegram_id": referidor_id},
+            {
+                "referral_available_balance": float(monto),
+                "referral_reserved_balance": -float(monto),
+            },
+        )
+
+    @staticmethod
+    def confirmar_referral_pagado(referidor_id: int, monto: float):
+        return db.incrementar_documento(
+            UsuarioModel.COLECCION,
+            {"telegram_id": referidor_id},
+            {
+                "referral_reserved_balance": -float(monto),
+                "referral_paid_total": float(monto),
             },
         )
 
@@ -527,7 +581,9 @@ class ReferralCommissionModel:
             "status": "pending_collection",
             "payout_status": "pending",
             "available_amount": 0.0,
+            "reserved_amount": 0.0,
             "paid_amount": 0.0,
+            "payout_request_id": None,
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow(),
         }
@@ -548,10 +604,17 @@ class ReferralCommissionModel:
         )
 
     @staticmethod
-    def actualizar_comision(filtro: Dict[str, Any], actualizacion: Dict[str, Any]):
-        payload = dict(actualizacion)
-        payload["updated_at"] = datetime.utcnow()
-        return db.actualizar_documento(ReferralCommissionModel.COLECCION, filtro, payload)
+    @staticmethod
+    def obtener_comisiones_disponibles_referidor(referidor_id: int):
+        return db.buscar_todos_documentos(
+            ReferralCommissionModel.COLECCION,
+            {
+                "referidor_id": int(referidor_id),
+                "payout_status": "available",
+                "available_amount": {"$gt": 0},
+            },
+            sort=[("available_at", 1), ("created_at", 1)],
+        )
 
 
 class PaymentInvoiceModel:
@@ -600,6 +663,56 @@ class PaymentInvoiceModel:
             {"telegram_id": telegram_id, "status": {"$in": ["pending", "reported"]}},
         )
 
+
+
+class ReferralPayoutRequestModel:
+    COLECCION = "referral_payout_requests"
+
+    @staticmethod
+    def ensure_indexes() -> None:
+        db.crear_indice(ReferralPayoutRequestModel.COLECCION, "request_id", unique=True)
+        db.crear_indice(ReferralPayoutRequestModel.COLECCION, "referidor_id")
+        db.crear_indice(ReferralPayoutRequestModel.COLECCION, "status")
+        db.crear_indice(ReferralPayoutRequestModel.COLECCION, "created_at")
+
+    @staticmethod
+    def registrar_request(data: Dict[str, Any]):
+        payload = {
+            "status": "requested",
+            "asset": PAYMENT_ASSET,
+            "minimum_amount": float(REFERRAL_PAYOUT_MIN_USDT),
+            "cooldown_hours": int(REFERRAL_PAYOUT_COOLDOWN_HOURS),
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow(),
+        }
+        payload.update(data)
+        return db.insertar_documento(ReferralPayoutRequestModel.COLECCION, payload)
+
+    @staticmethod
+    def obtener_request(filtro: Dict[str, Any]):
+        return db.buscar_documento(ReferralPayoutRequestModel.COLECCION, filtro)
+
+    @staticmethod
+    def obtener_requests(filtro: Dict[str, Any], limit: Optional[int] = 50):
+        return db.buscar_todos_documentos(
+            ReferralPayoutRequestModel.COLECCION,
+            filtro,
+            sort=[("created_at", DESCENDING)],
+            limit=limit,
+        )
+
+    @staticmethod
+    def actualizar_request(filtro: Dict[str, Any], actualizacion: Dict[str, Any]):
+        payload = dict(actualizacion)
+        payload["updated_at"] = datetime.utcnow()
+        return db.actualizar_documento(ReferralPayoutRequestModel.COLECCION, filtro, payload)
+
+    @staticmethod
+    def obtener_request_activo(referidor_id: int):
+        return db.buscar_documento(
+            ReferralPayoutRequestModel.COLECCION,
+            {"referidor_id": int(referidor_id), "status": {"$in": ["requested", "processing"]}},
+        )
 
 
 class TradeStateModel:
@@ -694,5 +807,6 @@ def ensure_indexes() -> None:
     FeeModel.ensure_indexes()
     ReferralCommissionModel.ensure_indexes()
     PaymentInvoiceModel.ensure_indexes()
+    ReferralPayoutRequestModel.ensure_indexes()
     TradeStateModel.ensure_indexes()
     TradeEventModel.ensure_indexes()
