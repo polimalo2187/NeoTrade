@@ -1,12 +1,27 @@
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 from urllib.parse import quote
 
-from app.config import CAPITAL_ACTIVO_PORC, PAYMENT_ASSET, QUOTE_ASSET
+from app.config import (
+    CAPITAL_ACTIVO_PORC,
+    PAYMENT_ASSET,
+    QUOTE_ASSET,
+    REFERRAL_PAYOUT_COOLDOWN_HOURS,
+    REFERRAL_PAYOUT_MIN_USDT,
+)
 from app.exchange import CoinWApiError, CoinWEmptySpotBalanceError, ExchangeClient
 from app.fee_manager import FeeManager
-from app.models import OperacionModel, ReferidoModel, TradeEventModel, TradeStateModel, UsuarioModel
+from app.models import (
+    OperacionModel,
+    ReferidoModel,
+    ReferralCommissionModel,
+    ReferralPayoutRequestModel,
+    TradeEventModel,
+    TradeStateModel,
+    UsuarioModel,
+)
 from app.usuario import Usuario
 
 
@@ -62,6 +77,14 @@ class TradingToggleResult:
     invoice: Optional[Dict[str, Any]] = None
 
 
+@dataclass
+class ReferralPayoutResult:
+    status: str
+    user: Optional[Dict[str, Any]] = None
+    request: Optional[Dict[str, Any]] = None
+    reason: Optional[str] = None
+
+
 class UserTradingService:
     def __init__(self, fee_manager: Optional[FeeManager] = None):
         self.fee_manager = fee_manager or FeeManager()
@@ -83,6 +106,17 @@ class UserTradingService:
         if cleaned.lower().startswith("ref_"):
             cleaned = cleaned[4:]
         return cleaned.strip()
+
+    @staticmethod
+    def normalize_coinw_uid(value: Optional[str]) -> str:
+        if value is None:
+            return ""
+        return "".join(ch for ch in str(value).strip() if ch.isdigit())
+
+    @staticmethod
+    def is_valid_coinw_uid(value: Optional[str]) -> bool:
+        normalized = UserTradingService.normalize_coinw_uid(value)
+        return normalized.isdigit() and 4 <= len(normalized) <= 32
 
     @staticmethod
     def format_decimal(value: float) -> str:
@@ -321,11 +355,251 @@ class UserTradingService:
         usuario_actualizado = self.get_user(telegram_id) or usuario
         return ApiCredentialUpdateResult(status="api_validated", user=usuario_actualizado)
 
+    def get_active_referral_payout_request(self, telegram_id: int) -> Optional[Dict[str, Any]]:
+        return ReferralPayoutRequestModel.obtener_request_activo(telegram_id)
+
+    def save_referral_coinw_uid(self, telegram_id: int, coinw_uid: str) -> ReferralPayoutResult:
+        usuario = self.get_user(telegram_id)
+        if not usuario:
+            return ReferralPayoutResult(status="user_not_found")
+
+        normalized_uid = self.normalize_coinw_uid(coinw_uid)
+        if not self.is_valid_coinw_uid(normalized_uid):
+            return ReferralPayoutResult(
+                status="invalid_coinw_uid",
+                user=usuario,
+                reason="Debes introducir un UID válido de CoinW.",
+            )
+
+        UsuarioModel.guardar_coinw_uid_referidos(telegram_id, normalized_uid)
+        return ReferralPayoutResult(status="coinw_uid_saved", user=self.get_user(telegram_id) or usuario)
+
+    def _payout_request_status(self, usuario: Dict[str, Any]) -> Dict[str, Any]:
+        available = float(usuario.get("referral_available_balance", 0) or 0)
+        reserved = float(usuario.get("referral_reserved_balance", 0) or 0)
+        coinw_uid = usuario.get("referral_coinw_uid")
+        active_request = self.get_active_referral_payout_request(int(usuario.get("telegram_id")))
+        last_requested_at = usuario.get("referral_last_payout_requested_at")
+        can_request = True
+        reason = None
+
+        if not self.is_valid_coinw_uid(coinw_uid):
+            can_request = False
+            reason = "Guarda primero tu UID de CoinW."
+        elif active_request:
+            can_request = False
+            reason = "Ya tienes una solicitud activa en proceso."
+        elif available < float(REFERRAL_PAYOUT_MIN_USDT):
+            can_request = False
+            reason = f"Necesitas al menos {REFERRAL_PAYOUT_MIN_USDT:.2f} {PAYMENT_ASSET} disponibles."
+        elif last_requested_at:
+            next_allowed_at = last_requested_at + timedelta(hours=REFERRAL_PAYOUT_COOLDOWN_HOURS)
+            if datetime.utcnow() < next_allowed_at:
+                can_request = False
+                reason = f"Debes esperar {REFERRAL_PAYOUT_COOLDOWN_HOURS}h entre solicitudes."
+
+        return {
+            "coinw_uid": coinw_uid,
+            "minimum_amount": float(REFERRAL_PAYOUT_MIN_USDT),
+            "cooldown_hours": int(REFERRAL_PAYOUT_COOLDOWN_HOURS),
+            "active_request": active_request,
+            "can_request": can_request and reserved <= 0,
+            "reason": reason,
+            "last_requested_at": last_requested_at,
+        }
+
+    def _generate_referral_payout_request_id(self, telegram_id: int) -> str:
+        return f"RFP-{telegram_id}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+
+    def request_referral_payout(self, telegram_id: int) -> ReferralPayoutResult:
+        usuario = self.get_user(telegram_id)
+        if not usuario:
+            return ReferralPayoutResult(status="user_not_found")
+
+        payout_state = self._payout_request_status(usuario)
+        if not payout_state["can_request"]:
+            return ReferralPayoutResult(
+                status="payout_request_blocked",
+                user=usuario,
+                request=payout_state.get("active_request"),
+                reason=payout_state.get("reason") or "No puedes solicitar payout todavía.",
+            )
+
+        amount = round(float(usuario.get("referral_available_balance", 0) or 0), 8)
+        available_commissions = ReferralCommissionModel.obtener_comisiones_disponibles_referidor(telegram_id)
+        if not available_commissions:
+            return ReferralPayoutResult(
+                status="payout_request_blocked",
+                user=usuario,
+                reason="No hay comisiones disponibles para reservar.",
+            )
+
+        request_id = self._generate_referral_payout_request_id(telegram_id)
+        remaining = amount
+        reserved_total = 0.0
+        reserved_commissions = []
+        for commission in available_commissions:
+            if remaining <= 0:
+                break
+            commission_amount = round(float(commission.get("available_amount") or commission.get("commission_amount") or 0.0), 8)
+            if commission_amount <= 0:
+                continue
+            reserve_amount = round(min(commission_amount, remaining), 8)
+            ReferralCommissionModel.actualizar_comision(
+                {"_id": commission.get("_id")},
+                {
+                    "payout_status": "reserved",
+                    "reserved_amount": reserve_amount,
+                    "available_amount": max(commission_amount - reserve_amount, 0.0),
+                    "payout_request_id": request_id,
+                    "reserved_at": datetime.utcnow(),
+                },
+            )
+            reserved_total = round(reserved_total + reserve_amount, 8)
+            remaining = round(remaining - reserve_amount, 8)
+            reserved_commissions.append(str(commission.get("_id")))
+
+        if reserved_total <= 0:
+            return ReferralPayoutResult(
+                status="payout_request_blocked",
+                user=usuario,
+                reason="No se pudo reservar saldo para el payout.",
+            )
+
+        UsuarioModel.reservar_referral_para_payout(telegram_id, reserved_total)
+        UsuarioModel.actualizar_usuario(
+            {"telegram_id": telegram_id},
+            {"referral_last_payout_requested_at": datetime.utcnow()},
+        )
+
+        ReferralPayoutRequestModel.registrar_request(
+            {
+                "request_id": request_id,
+                "referidor_id": telegram_id,
+                "amount_requested": reserved_total,
+                "amount_reserved": reserved_total,
+                "coinw_uid": payout_state.get("coinw_uid"),
+                "commission_ids": reserved_commissions,
+            }
+        )
+        request = ReferralPayoutRequestModel.obtener_request({"request_id": request_id})
+        self.fee_manager.notifier.send(
+            telegram_id,
+            (
+                "💸 Solicitud de payout creada\n\n"
+                f"Monto reservado: {reserved_total:.2f} {PAYMENT_ASSET}\n"
+                f"UID CoinW: {payout_state.get('coinw_uid')}\n"
+                f"Solicitud: {request_id}\n\n"
+                "Administración la revisará manualmente."
+            ),
+        )
+        return ReferralPayoutResult(status="payout_requested", user=self.get_user(telegram_id) or usuario, request=request)
+
+    def admin_confirm_referral_payout(self, request_id: str, admin_id: int) -> ReferralPayoutResult:
+        request = ReferralPayoutRequestModel.obtener_request({"request_id": request_id})
+        if not request or request.get("status") not in {"requested", "processing"}:
+            return ReferralPayoutResult(status="request_not_found")
+
+        referidor_id = int(request.get("referidor_id"))
+        amount = round(float(request.get("amount_reserved") or request.get("amount_requested") or 0.0), 8)
+        commissions = ReferralCommissionModel.obtener_comisiones({"payout_request_id": request_id}, limit=500)
+        for commission in commissions:
+            reserved_amount = round(float(commission.get("reserved_amount") or commission.get("commission_amount") or 0.0), 8)
+            ReferralCommissionModel.actualizar_comision(
+                {"_id": commission.get("_id")},
+                {
+                    "payout_status": "paid",
+                    "paid_amount": reserved_amount,
+                    "reserved_amount": 0.0,
+                    "paid_at": datetime.utcnow(),
+                },
+            )
+
+        UsuarioModel.confirmar_referral_pagado(referidor_id, amount)
+        ReferralPayoutRequestModel.actualizar_request(
+            {"request_id": request_id},
+            {
+                "status": "paid",
+                "processed_by": admin_id,
+                "processed_at": datetime.utcnow(),
+            },
+        )
+        self.fee_manager.notifier.send(
+            referidor_id,
+            (
+                "✅ Payout de referidos confirmado\n\n"
+                f"Monto pagado: {amount:.2f} {PAYMENT_ASSET}\n"
+                f"Solicitud: {request_id}\n\n"
+                "El saldo ya fue marcado como pagado."
+            ),
+        )
+        return ReferralPayoutResult(
+            status="payout_paid",
+            user=self.get_user(referidor_id),
+            request=ReferralPayoutRequestModel.obtener_request({"request_id": request_id}),
+        )
+
+    def admin_reject_referral_payout(self, request_id: str, admin_id: int, reason: Optional[str] = None) -> ReferralPayoutResult:
+        request = ReferralPayoutRequestModel.obtener_request({"request_id": request_id})
+        if not request or request.get("status") not in {"requested", "processing"}:
+            return ReferralPayoutResult(status="request_not_found")
+
+        referidor_id = int(request.get("referidor_id"))
+        amount = round(float(request.get("amount_reserved") or request.get("amount_requested") or 0.0), 8)
+        commissions = ReferralCommissionModel.obtener_comisiones({"payout_request_id": request_id}, limit=500)
+        for commission in commissions:
+            reserved_amount = round(float(commission.get("reserved_amount") or commission.get("commission_amount") or 0.0), 8)
+            ReferralCommissionModel.actualizar_comision(
+                {"_id": commission.get("_id")},
+                {
+                    "payout_status": "available",
+                    "available_amount": reserved_amount,
+                    "reserved_amount": 0.0,
+                    "payout_request_id": None,
+                    "rejected_at": datetime.utcnow(),
+                },
+            )
+
+        UsuarioModel.revertir_reserva_referral(referidor_id, amount)
+        ReferralPayoutRequestModel.actualizar_request(
+            {"request_id": request_id},
+            {
+                "status": "rejected",
+                "processed_by": admin_id,
+                "processed_at": datetime.utcnow(),
+                "admin_note": reason or "Solicitud rechazada por administración",
+            },
+        )
+        self.fee_manager.notifier.send(
+            referidor_id,
+            (
+                "❌ Payout de referidos rechazado\n\n"
+                f"Solicitud: {request_id}\n"
+                f"Motivo: {reason or 'Solicitud rechazada por administración'}\n\n"
+                "El saldo reservado volvió a estar disponible."
+            ),
+        )
+        return ReferralPayoutResult(
+            status="payout_rejected",
+            user=self.get_user(referidor_id),
+            request=ReferralPayoutRequestModel.obtener_request({"request_id": request_id}),
+        )
+
     def get_referral_summary(self, telegram_id: int) -> Dict[str, Any]:
         usuario = self.get_user(telegram_id) or {}
         referidos = ReferidoModel.obtener_referidos({"referidor_id": telegram_id})
+        referidos_activos = [item for item in referidos if item.get("status") == "linked"]
         codigo_referido = str(usuario.get("codigo_referido") or telegram_id)
         enlace_referido = f"{REFERRAL_BOT_URL}?start={quote(codigo_referido)}"
+        payout_state = self._payout_request_status(usuario) if usuario else {
+            "coinw_uid": None,
+            "minimum_amount": float(REFERRAL_PAYOUT_MIN_USDT),
+            "cooldown_hours": int(REFERRAL_PAYOUT_COOLDOWN_HOURS),
+            "active_request": None,
+            "can_request": False,
+            "reason": "Usuario no encontrado",
+            "last_requested_at": None,
+        }
         return {
             "codigo_referido": codigo_referido,
             "enlace_referido": enlace_referido,
@@ -334,9 +608,18 @@ class UserTradingService:
             "ganancia_acumulada": float(usuario.get("ganancia_acumulada_referidos", 0) or 0),
             "saldo_pendiente": float(usuario.get("referral_pending_balance", 0) or 0),
             "saldo_disponible": float(usuario.get("referral_available_balance", 0) or 0),
+            "saldo_reservado": float(usuario.get("referral_reserved_balance", 0) or 0),
             "saldo_pagado": float(usuario.get("referral_paid_total", 0) or 0),
-            "referidos_activos": len(referidos),
+            "referidos_activos": len(referidos_activos),
+            "referidos_totales": len(referidos),
             "referidos": referidos,
+            "coinw_uid": payout_state.get("coinw_uid"),
+            "minimum_amount": payout_state.get("minimum_amount"),
+            "cooldown_hours": payout_state.get("cooldown_hours"),
+            "active_payout_request": payout_state.get("active_request"),
+            "can_request_payout": payout_state.get("can_request"),
+            "payout_request_reason": payout_state.get("reason"),
+            "last_requested_at": payout_state.get("last_requested_at"),
         }
 
     def get_dashboard_snapshot(
@@ -431,7 +714,10 @@ class UserTradingService:
             "payment_method": usuario.get("payment_method") or "coinw_internal",
             "referral_pending_balance": float(usuario.get("referral_pending_balance", 0) or 0),
             "referral_available_balance": float(usuario.get("referral_available_balance", 0) or 0),
+            "referral_reserved_balance": float(usuario.get("referral_reserved_balance", 0) or 0),
             "referral_paid_total": float(usuario.get("referral_paid_total", 0) or 0),
+            "referral_coinw_uid": usuario.get("referral_coinw_uid"),
+            "referral_last_payout_requested_at": usuario.get("referral_last_payout_requested_at"),
             "ganancia_diaria_referidos": float(usuario.get("ganancia_diaria_referidos", 0) or 0),
             "ganancia_acumulada_referidos": float(usuario.get("ganancia_acumulada_referidos", 0) or 0),
             "capital_total": float(usuario.get("capital_total", 0) or 0),
