@@ -360,23 +360,98 @@ def create_api_app() -> FastAPI:
     @app.get(f"{API_PREFIX}/admin/summary")
     def admin_summary(current_admin: AuthenticatedUser = Depends(get_admin_user)):
         usuarios = UsuarioModel.obtener_todos_usuarios()
+        user_by_id = {
+            int(user.get("telegram_id")): user
+            for user in usuarios
+            if user.get("telegram_id") is not None
+        }
+
+        def _sort_dt(item: Dict[str, Any]):
+            return item.get("updated_at") or item.get("created_at") or datetime(1970, 1, 1)
+
+        usuarios_ordenados = sorted(usuarios, key=_sort_dt, reverse=True)
         activos = [u for u in usuarios if u.get("bot_activo")]
         bloqueados_fee = [u for u in usuarios if u.get("trading_pause_reason") == "fee_due"]
+        con_credenciales = [u for u in usuarios if u.get("api_key") and u.get("api_secret")]
+        con_posicion_activa = [u for u in usuarios if u.get("active_position")]
+        con_error_engine = [u for u in usuarios_ordenados if u.get("last_engine_error")]
         capital_total = sum(float(u.get("capital_total", 0) or 0) for u in usuarios)
         pending_invoices = PaymentInvoiceModel.obtener_facturas({"status": {"$in": ["pending", "reported"]}}, limit=20)
         pending_referral_payouts = ReferralPayoutRequestModel.obtener_requests({"status": {"$in": ["requested", "processing"]}}, limit=20)
         recent_operations = OperacionModel.obtener_operaciones({}, limit=10)
+
+        recent_users = []
+        for usuario in usuarios_ordenados[:8]:
+            public_user = service.serialize_user_public(usuario)
+            recent_users.append(
+                {
+                    "telegram_id": public_user.get("telegram_id"),
+                    "nombre": public_user.get("nombre"),
+                    "bot_activo": public_user.get("bot_activo"),
+                    "trading_enabled": public_user.get("trading_enabled"),
+                    "fee_status": public_user.get("fee_status"),
+                    "has_api_credentials": public_user.get("has_api_credentials"),
+                    "capital_total": public_user.get("capital_total"),
+                    "capital_activo": public_user.get("capital_activo"),
+                    "active_position": bool(public_user.get("active_position")),
+                    "last_engine_error": public_user.get("last_engine_error"),
+                    "updated_at": public_user.get("updated_at"),
+                }
+            )
+
+        recent_engine_errors = []
+        for usuario in con_error_engine[:8]:
+            recent_engine_errors.append(
+                {
+                    "telegram_id": usuario.get("telegram_id"),
+                    "nombre": usuario.get("nombre"),
+                    "error": usuario.get("last_engine_error"),
+                    "updated_at": usuario.get("updated_at"),
+                    "bot_activo": bool(usuario.get("bot_activo")),
+                    "trading_enabled": bool(usuario.get("trading_enabled", True)),
+                }
+            )
+
+        enriched_payouts = []
+        for request in pending_referral_payouts:
+            item = dict(request)
+            linked_user = user_by_id.get(int(request.get("referidor_id") or 0))
+            if linked_user:
+                item["user"] = {
+                    "telegram_id": linked_user.get("telegram_id"),
+                    "nombre": linked_user.get("nombre"),
+                    "bot_activo": bool(linked_user.get("bot_activo")),
+                    "has_api_credentials": bool(linked_user.get("api_key") and linked_user.get("api_secret")),
+                    "referral_coinw_uid": linked_user.get("referral_coinw_uid"),
+                    "referral_available_balance": float(linked_user.get("referral_available_balance", 0) or 0),
+                    "referral_reserved_balance": float(linked_user.get("referral_reserved_balance", 0) or 0),
+                }
+            enriched_payouts.append(item)
+
         return _json(
             {
+                "generated_at": datetime.utcnow(),
                 "admin": current_admin.model_dump(),
                 "users": {
                     "total": len(usuarios),
                     "active_bot": len(activos),
+                    "with_credentials": len(con_credenciales),
+                    "active_positions": len(con_posicion_activa),
                     "blocked_fee": len(bloqueados_fee),
                     "capital_total_estimated": capital_total,
                 },
+                "finance": {
+                    "pending_invoices_count": len(pending_invoices),
+                    "pending_referral_payouts_count": len(enriched_payouts),
+                },
+                "health": {
+                    "recent_engine_errors_count": len(recent_engine_errors),
+                    "recent_operations_count": len(recent_operations),
+                },
+                "recent_users": recent_users,
+                "recent_engine_errors": recent_engine_errors,
                 "pending_invoices": pending_invoices,
-                "pending_referral_payouts": pending_referral_payouts,
+                "pending_referral_payouts": enriched_payouts,
                 "recent_operations": recent_operations,
             }
         )
