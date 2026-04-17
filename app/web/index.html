@@ -15,16 +15,38 @@
         <div class="brand">
           <div class="brand__stack">
             <div class="eyebrow">Trading automático</div>
-            <div class="brand__logo">
+            <div class="brand__logo brand__logo--hero">
               <img src="/assets/logo-mark.png" alt="NeoTrade" />
+            </div>
+            <p class="brand__subtitle">
+              Infraestructura operativa para supervisar, ejecutar y controlar tu trading automático en Spot desde una interfaz profesional.
+            </p>
+            <div class="brand__chips">
+              <span class="chip chip--subtle">CoinW Spot</span>
+              <span class="chip chip--subtle">Ejecución automática</span>
+              <span class="chip chip--subtle">Control centralizado</span>
             </div>
           </div>
         </div>
-        <div class="topbar__meta">
-          <span id="connectionBadge" class="badge badge--neutral">Inicializando</span>
-          <button id="refreshButton" class="icon-button" type="button" title="Actualizar dashboard">
-            ⟳
-          </button>
+        <div class="topbar__side">
+          <div class="topbar__meta">
+            <span id="connectionBadge" class="badge badge--neutral">Inicializando</span>
+            <button id="refreshButton" class="icon-button" type="button" title="Actualizar dashboard">
+              ⟳
+            </button>
+          </div>
+          <div class="topbar__stats">
+            <article class="topbar-stat">
+              <span class="topbar-stat__label">Estado del bot</span>
+              <strong id="topbarBotStatus">--</strong>
+              <small id="topbarBotDetail">Esperando autenticación</small>
+            </article>
+            <article class="topbar-stat">
+              <span class="topbar-stat__label">Capital activo</span>
+              <strong id="topbarCapitalActivo">--</strong>
+              <small id="topbarCapitalTotal">Capital total --</small>
+            </article>
+          </div>
         </div>
       </header>
 
