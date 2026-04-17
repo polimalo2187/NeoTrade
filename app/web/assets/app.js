@@ -87,7 +87,14 @@ const els = {
   adminCapitalTotal: document.getElementById('adminCapitalTotal'),
   adminPendingInvoices: document.getElementById('adminPendingInvoices'),
   adminPendingPayouts: document.getElementById('adminPendingPayouts'),
-  adminRecentUsersList: document.getElementById('adminRecentUsersList'),
+  adminHealthSystemStatus: document.getElementById('adminHealthSystemStatus'),
+  adminHealthErrorCount: document.getElementById('adminHealthErrorCount'),
+  adminHealthOperationsCount: document.getElementById('adminHealthOperationsCount'),
+  adminHealthUsersWithApi: document.getElementById('adminHealthUsersWithApi'),
+  adminHealthFeeBlocked: document.getElementById('adminHealthFeeBlocked'),
+  adminHealthActivePositions: document.getElementById('adminHealthActivePositions'),
+  adminHealthLastOperation: document.getElementById('adminHealthLastOperation'),
+  adminHealthLastUserActivity: document.getElementById('adminHealthLastUserActivity'),
   adminPendingPayoutsList: document.getElementById('adminPendingPayoutsList'),
   adminEngineIssuesList: document.getElementById('adminEngineIssuesList'),
   adminUserSearchForm: document.getElementById('adminUserSearchForm'),
@@ -699,7 +706,7 @@ function renderAdminSearchResults(payload, query) {
   if (els.adminUserSearchHelp) {
     els.adminUserSearchHelp.textContent = query
       ? `${payload?.count || 0} resultado(s) para "${query}".`
-      : 'Mostrando usuarios recientes. Busca por Telegram ID, nombre, código de referido o UID CoinW.';
+      : 'Mostrando usuarios recientes dentro de la búsqueda. Busca por Telegram ID, nombre, código de referido o UID CoinW.';
   }
   renderList(els.adminUserSearchResults, state.adminUserSearchResults, adminSearchResultCard);
 }
@@ -749,6 +756,50 @@ function renderAdminUserDetail(payload) {
   renderList(els.adminDetailOperations, payload?.recent_operations || [], adminOperationMiniCard);
 }
 
+function adminHealthIssueCard(item) {
+  return makeTimelineCard(
+    textOrDash(item.nombre, 'Motor'),
+    formatDate(item.updated_at, 'Sin registro'),
+    textOrDash(item.error, 'Sin error reciente'),
+    [
+      item.bot_activo ? 'Bot activo' : 'Bot detenido',
+      item.trading_enabled ? 'Trading habilitado' : 'Trading pausado',
+    ],
+  );
+}
+
+function renderAdminHealth(payload) {
+  const health = payload?.health || {};
+  const issues = payload?.recent_engine_errors || [];
+  const hasIssues = asNumber(health.recent_engine_errors_count, 0) > 0;
+  if (els.adminHealthSystemStatus) {
+    els.adminHealthSystemStatus.textContent = hasIssues ? 'Con incidencias' : 'Operativo';
+    els.adminHealthSystemStatus.className = hasIssues ? 'status-bad' : 'status-good';
+  }
+  if (els.adminHealthErrorCount) els.adminHealthErrorCount.textContent = String(asNumber(health.recent_engine_errors_count, 0));
+  if (els.adminHealthOperationsCount) els.adminHealthOperationsCount.textContent = String(asNumber(health.recent_operations_count, 0));
+  if (els.adminHealthUsersWithApi) els.adminHealthUsersWithApi.textContent = String(asNumber(health.users_with_credentials, 0));
+  if (els.adminHealthFeeBlocked) els.adminHealthFeeBlocked.textContent = String(asNumber(health.blocked_fee_users, 0));
+  if (els.adminHealthActivePositions) els.adminHealthActivePositions.textContent = String(asNumber(health.active_positions, 0));
+  if (els.adminHealthLastOperation) els.adminHealthLastOperation.textContent = formatDate(health.latest_operation_at, 'Sin registro');
+  if (els.adminHealthLastUserActivity) els.adminHealthLastUserActivity.textContent = formatDate(health.latest_user_activity_at, 'Sin registro');
+
+  if (!els.adminEngineIssuesList) return;
+  if (!issues.length) {
+    els.adminEngineIssuesList.innerHTML = '';
+    els.adminEngineIssuesList.appendChild(
+      makeTimelineCard(
+        'Sin incidencias recientes',
+        formatDate(payload?.generated_at, 'Sin sincronización'),
+        'El engine no ha reportado errores recientes en esta ventana de supervisión.',
+        ['Sistema estable'],
+      ),
+    );
+    return;
+  }
+  renderList(els.adminEngineIssuesList, issues, adminHealthIssueCard);
+}
+
 function renderAdminSummary(payload) {
   state.adminSummary = payload;
   if (els.adminPanel) {
@@ -770,9 +821,8 @@ function renderAdminSummary(payload) {
   els.adminPendingInvoices.textContent = String(asNumber(payload.finance?.pending_invoices_count, 0));
   els.adminPendingPayouts.textContent = String(asNumber(payload.finance?.pending_referral_payouts_count, 0));
 
-  renderList(els.adminRecentUsersList, payload.recent_users || [], adminUserCard);
   renderList(els.adminPendingPayoutsList, payload.pending_referral_payouts || [], adminPayoutCard);
-  renderList(els.adminEngineIssuesList, payload.recent_engine_errors || [], adminEngineIssueCard);
+  renderAdminHealth(payload);
   renderAdminSearchResults({ results: payload.recent_users || [], count: (payload.recent_users || []).length }, '');
   resetAdminUserDetail();
 }
