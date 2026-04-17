@@ -404,6 +404,74 @@
                 <div id="adminEngineIssuesList" class="list-panel"></div>
               </article>
             </div>
+
+            <div class="admin-grid admin-grid--secondary">
+              <article class="surface-inset account-section">
+                <div class="account-section__header">
+                  <p class="eyebrow">Gestión de usuarios</p>
+                  <h4>Búsqueda y acceso rápido</h4>
+                  <p class="helper-text helper-text--compact">Busca por Telegram ID, nombre, código de referido o UID CoinW.</p>
+                </div>
+                <form id="adminUserSearchForm" class="form-stack" autocomplete="off">
+                  <label>
+                    <span>Buscar usuario</span>
+                    <input id="adminUserSearchInput" type="text" placeholder="Ejemplo: 2010460041" inputmode="search" />
+                  </label>
+                  <div class="button-row">
+                    <button id="adminUserSearchButton" type="submit" class="button button--secondary">Buscar usuario</button>
+                    <button id="adminUserSearchClearButton" type="button" class="button button--ghost">Limpiar</button>
+                  </div>
+                </form>
+                <div id="adminUserSearchHelp" class="helper-text helper-text--compact">También puedes abrir detalles desde usuarios recientes, payouts o errores del engine.</div>
+                <div id="adminUserSearchResults" class="list-panel list-panel--spaced"></div>
+              </article>
+
+              <article class="surface-inset account-section">
+                <div class="account-section__header">
+                  <p class="eyebrow">Detalle de usuario</p>
+                  <h4 id="adminUserDetailTitle">Selecciona un usuario</h4>
+                  <p id="adminUserDetailSubtitle" class="helper-text helper-text--compact">Consulta estado operativo, referidos, payouts y operativa reciente.</p>
+                </div>
+                <div id="adminUserDetailEmpty" class="empty-state">
+                  <strong>Sin usuario seleccionado</strong>
+                  <p>Busca un usuario o ábrelo desde una tarjeta del panel para cargar su detalle completo.</p>
+                </div>
+                <div id="adminUserDetailContent" class="hidden">
+                  <div class="status-list status-list--section">
+                    <div><span>Telegram ID</span><strong id="adminDetailTelegramId">Sin ID</strong></div>
+                    <div><span>Estado del bot</span><strong id="adminDetailBotStatus">Bot detenido</strong></div>
+                    <div><span>Trading</span><strong id="adminDetailTradingStatus">No disponible</strong></div>
+                    <div><span>Credenciales API</span><strong id="adminDetailApiStatus">Sin API</strong></div>
+                    <div><span>Fee</span><strong id="adminDetailFeeStatus">Sin fee pendiente</strong></div>
+                    <div><span>Capital total</span><strong id="adminDetailCapitalTotal">0.00 USDT</strong></div>
+                    <div><span>Capital activo</span><strong id="adminDetailCapitalActivo">0.00 USDT</strong></div>
+                    <div><span>Referidor</span><strong id="adminDetailReferrer">Sin referidor</strong></div>
+                    <div><span>Total referidos</span><strong id="adminDetailReferralCount">0</strong></div>
+                    <div><span>Saldo referido disponible</span><strong id="adminDetailReferralAvailable">0.00 USDT</strong></div>
+                    <div><span>UID CoinW</span><strong id="adminDetailCoinwUid">No configurado</strong></div>
+                    <div><span>Payout activo</span><strong id="adminDetailPayoutStatus">No</strong></div>
+                    <div><span>Última actualización</span><strong id="adminDetailUpdatedAt">Sin actualización</strong></div>
+                  </div>
+
+                  <div class="divider"></div>
+
+                  <div class="admin-detail-lists">
+                    <div>
+                      <p class="eyebrow">Referidos vinculados</p>
+                      <div id="adminDetailReferredUsers" class="list-panel"></div>
+                    </div>
+                    <div>
+                      <p class="eyebrow">Payouts recientes</p>
+                      <div id="adminDetailPayoutHistory" class="list-panel"></div>
+                    </div>
+                    <div>
+                      <p class="eyebrow">Operativa reciente</p>
+                      <div id="adminDetailOperations" class="list-panel"></div>
+                    </div>
+                  </div>
+                </div>
+              </article>
+            </div>
           </article>
         </section>
       </main>
