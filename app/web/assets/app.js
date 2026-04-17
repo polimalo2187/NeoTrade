@@ -6,6 +6,8 @@ const state = {
   telegramIdentity: null,
   sessionClaims: null,
   adminSummary: null,
+  adminUserSearchResults: [],
+  adminSelectedUserDetail: null,
   isAuthenticated: false,
   isAdmin: false,
 };
@@ -88,6 +90,32 @@ const els = {
   adminRecentUsersList: document.getElementById('adminRecentUsersList'),
   adminPendingPayoutsList: document.getElementById('adminPendingPayoutsList'),
   adminEngineIssuesList: document.getElementById('adminEngineIssuesList'),
+  adminUserSearchForm: document.getElementById('adminUserSearchForm'),
+  adminUserSearchInput: document.getElementById('adminUserSearchInput'),
+  adminUserSearchButton: document.getElementById('adminUserSearchButton'),
+  adminUserSearchClearButton: document.getElementById('adminUserSearchClearButton'),
+  adminUserSearchHelp: document.getElementById('adminUserSearchHelp'),
+  adminUserSearchResults: document.getElementById('adminUserSearchResults'),
+  adminUserDetailTitle: document.getElementById('adminUserDetailTitle'),
+  adminUserDetailSubtitle: document.getElementById('adminUserDetailSubtitle'),
+  adminUserDetailEmpty: document.getElementById('adminUserDetailEmpty'),
+  adminUserDetailContent: document.getElementById('adminUserDetailContent'),
+  adminDetailTelegramId: document.getElementById('adminDetailTelegramId'),
+  adminDetailBotStatus: document.getElementById('adminDetailBotStatus'),
+  adminDetailTradingStatus: document.getElementById('adminDetailTradingStatus'),
+  adminDetailApiStatus: document.getElementById('adminDetailApiStatus'),
+  adminDetailFeeStatus: document.getElementById('adminDetailFeeStatus'),
+  adminDetailCapitalTotal: document.getElementById('adminDetailCapitalTotal'),
+  adminDetailCapitalActivo: document.getElementById('adminDetailCapitalActivo'),
+  adminDetailReferrer: document.getElementById('adminDetailReferrer'),
+  adminDetailReferralCount: document.getElementById('adminDetailReferralCount'),
+  adminDetailReferralAvailable: document.getElementById('adminDetailReferralAvailable'),
+  adminDetailCoinwUid: document.getElementById('adminDetailCoinwUid'),
+  adminDetailPayoutStatus: document.getElementById('adminDetailPayoutStatus'),
+  adminDetailUpdatedAt: document.getElementById('adminDetailUpdatedAt'),
+  adminDetailReferredUsers: document.getElementById('adminDetailReferredUsers'),
+  adminDetailPayoutHistory: document.getElementById('adminDetailPayoutHistory'),
+  adminDetailOperations: document.getElementById('adminDetailOperations'),
   tabs: Array.from(document.querySelectorAll('.tab')),
   listEmptyTemplate: document.getElementById('listEmptyTemplate'),
 };
@@ -139,6 +167,20 @@ function showAdminPanelError(message) {
   if (!els.adminPanelError) return;
   els.adminPanelError.textContent = message;
   els.adminPanelError.classList.remove('hidden');
+}
+
+function resetAdminUserDetail(message = 'Busca un usuario o ábrelo desde una tarjeta del panel para cargar su detalle completo.') {
+  state.adminSelectedUserDetail = null;
+  if (els.adminUserDetailTitle) els.adminUserDetailTitle.textContent = 'Selecciona un usuario';
+  if (els.adminUserDetailSubtitle) els.adminUserDetailSubtitle.textContent = 'Consulta estado operativo, referidos, payouts y operativa reciente.';
+  if (els.adminUserDetailEmpty) {
+    els.adminUserDetailEmpty.classList.remove('hidden');
+    const paragraph = els.adminUserDetailEmpty.querySelector('p');
+    if (paragraph) paragraph.textContent = message;
+  }
+  if (els.adminUserDetailContent) {
+    els.adminUserDetailContent.classList.add('hidden');
+  }
 }
 
 
@@ -511,7 +553,7 @@ function makeActionButton(label, variant = 'ghost') {
 
 function adminUserCard(item) {
   const body = `ID ${textOrDash(item.telegram_id, 'sin ID')} · Capital ${formatMoney(asNumber(item.capital_total, 0))} · Activo ${formatMoney(asNumber(item.capital_activo, 0))}`;
-  return makeTimelineCard(
+  const card = makeTimelineCard(
     textOrDash(item.nombre, 'Usuario'),
     formatDate(item.updated_at),
     body,
@@ -523,11 +565,18 @@ function adminUserCard(item) {
       item.last_engine_error ? 'Revisar engine' : null,
     ],
   );
+  const footer = document.createElement('div');
+  footer.className = 'timeline-card__actions';
+  const detailButton = makeActionButton('Abrir usuario', 'ghost');
+  detailButton.addEventListener('click', () => loadAdminUserDetail(item.telegram_id));
+  footer.append(detailButton);
+  card.appendChild(footer);
+  return card;
 }
 
 function adminEngineIssueCard(item) {
   const body = textOrDash(item.error, 'Sin detalle de error.');
-  return makeTimelineCard(
+  const card = makeTimelineCard(
     `${textOrDash(item.nombre, 'Usuario')} · ${textOrDash(item.telegram_id, 'sin ID')}`,
     formatDate(item.updated_at),
     body,
@@ -536,6 +585,13 @@ function adminEngineIssueCard(item) {
       item.trading_enabled ? 'Trading habilitado' : 'Trading pausado',
     ],
   );
+  const footer = document.createElement('div');
+  footer.className = 'timeline-card__actions';
+  const detailButton = makeActionButton('Abrir usuario', 'ghost');
+  detailButton.addEventListener('click', () => loadAdminUserDetail(item.telegram_id));
+  footer.append(detailButton);
+  card.appendChild(footer);
+  return card;
 }
 
 function adminPayoutCard(item) {
@@ -553,13 +609,119 @@ function adminPayoutCard(item) {
   ]);
   const footer = document.createElement('div');
   footer.className = 'timeline-card__actions';
+  const detailButton = makeActionButton('Abrir usuario', 'ghost');
+  detailButton.addEventListener('click', () => loadAdminUserDetail(item.referidor_id));
   const confirmButton = makeActionButton('Confirmar pago', 'secondary');
   confirmButton.addEventListener('click', () => confirmReferralPayout(item.request_id));
   const rejectButton = makeActionButton('Rechazar', 'ghost');
   rejectButton.addEventListener('click', () => rejectReferralPayout(item.request_id));
-  footer.append(confirmButton, rejectButton);
+  footer.append(detailButton, confirmButton, rejectButton);
   card.appendChild(footer);
   return card;
+}
+
+function adminSearchResultCard(item) {
+  const body = `ID ${textOrDash(item.telegram_id, 'sin ID')} · Referidos ${asNumber(item.referral_total, 0)} · Disponible ${formatMoney(asNumber(item.referral_available_balance, 0))}`;
+  const card = makeTimelineCard(
+    textOrDash(item.nombre, 'Usuario'),
+    formatDate(item.updated_at),
+    body,
+    [
+      item.bot_activo ? 'Bot activo' : 'Bot detenido',
+      item.has_api_credentials ? 'API OK' : 'Sin API',
+      item.has_active_payout_request ? 'Payout activo' : null,
+      item.referral_coinw_uid ? 'UID CoinW' : null,
+    ],
+  );
+  const footer = document.createElement('div');
+  footer.className = 'timeline-card__actions';
+  const detailButton = makeActionButton('Ver detalle', 'secondary');
+  detailButton.addEventListener('click', () => loadAdminUserDetail(item.telegram_id));
+  footer.append(detailButton);
+  card.appendChild(footer);
+  return card;
+}
+
+function referredUserCard(item) {
+  const body = `ID ${textOrDash(item.telegram_id, 'sin ID')} · Disponible ${formatMoney(asNumber(item.total_disponible, 0))} · Pagado ${formatMoney(asNumber(item.total_pagado, 0))}`;
+  return makeTimelineCard(
+    textOrDash(item.nombre, 'Usuario'),
+    formatDate(item.last_commission_at || item.fecha_registro),
+    body,
+    [
+      item.bot_activo ? 'Bot activo' : 'Bot detenido',
+      item.has_api_credentials ? 'API OK' : 'Sin API',
+      textOrDash(item.status, 'linked'),
+    ],
+  );
+}
+
+function adminPayoutHistoryCard(item) {
+  const body = `UID CoinW ${textOrDash(item.coinw_uid, 'No configurado')} · ${textOrDash(item.status, 'requested')}`;
+  return makeTimelineCard(
+    `${textOrDash(item.request_id, 'Solicitud')} · ${formatMoney(asNumber(item.amount_requested, 0), item.asset || 'USDT')}`,
+    formatDate(item.processed_at || item.created_at),
+    body,
+    [item.admin_note || null],
+  );
+}
+
+function adminOperationMiniCard(item) {
+  const side = textOrDash(item.side || item.direction, 'spot');
+  return makeTimelineCard(
+    `${textOrDash(item.symbol)} · ${textOrDash(item.status)}`,
+    formatDate(item.updated_at || item.closed_at || item.created_at),
+    `Orden ${textOrDash(item.order_number)} · ${side}`,
+    [
+      item.entry_price ? `Entrada ${item.entry_price}` : null,
+      item.pnl_quote !== undefined && item.pnl_quote !== null ? `PnL ${Number(item.pnl_quote).toFixed(2)}` : null,
+    ],
+  );
+}
+
+function renderAdminSearchResults(payload, query) {
+  state.adminUserSearchResults = payload?.results || [];
+  if (els.adminUserSearchHelp) {
+    els.adminUserSearchHelp.textContent = query
+      ? `${payload?.count || 0} resultado(s) para "${query}".`
+      : 'Mostrando usuarios recientes. Busca por Telegram ID, nombre, código de referido o UID CoinW.';
+  }
+  renderList(els.adminUserSearchResults, state.adminUserSearchResults, adminSearchResultCard);
+}
+
+function renderAdminUserDetail(payload) {
+  state.adminSelectedUserDetail = payload;
+  const user = payload?.user || {};
+  const referrals = payload?.referrals || {};
+  const asset = user.payment_asset || 'USDT';
+  if (els.adminUserDetailEmpty) els.adminUserDetailEmpty.classList.add('hidden');
+  if (els.adminUserDetailContent) els.adminUserDetailContent.classList.remove('hidden');
+  if (els.adminUserDetailTitle) els.adminUserDetailTitle.textContent = textOrDash(user.nombre, 'Usuario');
+  if (els.adminUserDetailSubtitle) els.adminUserDetailSubtitle.textContent = `Telegram ID ${textOrDash(user.telegram_id, 'sin ID')} · ${user.has_api_credentials ? 'API configurada' : 'Sin API'} · ${user.bot_activo ? 'Bot activo' : 'Bot detenido'}`;
+
+  els.adminDetailTelegramId.textContent = textOrDash(user.telegram_id, 'Sin ID');
+  els.adminDetailBotStatus.textContent = user.bot_activo ? 'Bot activo' : 'Bot detenido';
+  els.adminDetailTradingStatus.textContent = tradingStatusLabel(user);
+  els.adminDetailApiStatus.textContent = user.has_api_credentials ? `Configurada · ${textOrDash(user.api_key_masked, 'oculta')}` : 'Sin API';
+  els.adminDetailFeeStatus.textContent = user.fee_due_total > 0
+    ? `${textOrDash(user.fee_status, 'due')} · ${formatMoney(asNumber(user.fee_due_total, 0), asset)}`
+    : 'Sin fee pendiente';
+  els.adminDetailCapitalTotal.textContent = formatMoney(asNumber(user.capital_total, 0), asset);
+  els.adminDetailCapitalActivo.textContent = formatMoney(asNumber(user.capital_activo, 0), asset);
+  els.adminDetailReferrer.textContent = payload?.referrer
+    ? `${textOrDash(payload.referrer.nombre, 'Usuario')} · ${textOrDash(payload.referrer.telegram_id, 'sin ID')}`
+    : 'Sin referidor';
+  els.adminDetailReferralCount.textContent = String(asNumber(referrals.referidos_totales, 0));
+  els.adminDetailReferralAvailable.textContent = formatMoney(asNumber(referrals.saldo_disponible, 0), asset);
+  els.adminDetailCoinwUid.textContent = textOrDash(referrals.coinw_uid, 'No configurado');
+  els.adminDetailPayoutStatus.textContent = payload?.active_payout_request
+    ? `${textOrDash(payload.active_payout_request.status, 'requested')} · ${formatMoney(asNumber(payload.active_payout_request.amount_requested, 0), asset)}`
+    : 'No';
+  els.adminDetailUpdatedAt.textContent = formatDate(user.updated_at);
+
+  renderList(els.adminDetailReferredUsers, payload?.referred_users || [], referredUserCard);
+  renderList(els.adminDetailPayoutHistory, payload?.recent_payout_requests || [], adminPayoutHistoryCard);
+  renderList(els.adminDetailOperations, payload?.recent_operations || [], adminOperationMiniCard);
 }
 
 function renderAdminSummary(payload) {
@@ -586,6 +748,46 @@ function renderAdminSummary(payload) {
   renderList(els.adminRecentUsersList, payload.recent_users || [], adminUserCard);
   renderList(els.adminPendingPayoutsList, payload.pending_referral_payouts || [], adminPayoutCard);
   renderList(els.adminEngineIssuesList, payload.recent_engine_errors || [], adminEngineIssueCard);
+  renderAdminSearchResults({ results: payload.recent_users || [], count: (payload.recent_users || []).length }, '');
+  resetAdminUserDetail();
+}
+
+async function loadAdminUserDetail(telegramId) {
+  if (!telegramId) return;
+  clearNotice();
+  try {
+    const payload = await fetchJson(`${apiPrefix()}/admin/users/${telegramId}`);
+    renderAdminUserDetail(payload);
+  } catch (error) {
+    showNotice('error', error.message || 'No se pudo cargar el detalle del usuario.');
+  }
+}
+
+async function submitAdminUserSearch(event) {
+  event?.preventDefault?.();
+  if (!state.isAdmin || !state.token) return;
+  const query = (els.adminUserSearchInput?.value || '').trim();
+  try {
+    const payload = await fetchJson(`${apiPrefix()}/admin/users/search?${new URLSearchParams({ query, limit: '12' }).toString()}`);
+    renderAdminSearchResults(payload, query);
+    if (payload?.count === 1 && payload?.results?.[0]?.telegram_id) {
+      await loadAdminUserDetail(payload.results[0].telegram_id);
+    } else if (!payload?.count) {
+      resetAdminUserDetail('No se encontraron usuarios para esa búsqueda.');
+    }
+  } catch (error) {
+    showNotice('error', error.message || 'No se pudo buscar el usuario.');
+  }
+}
+
+function clearAdminUserSearch() {
+  if (els.adminUserSearchInput) els.adminUserSearchInput.value = '';
+  state.adminUserSearchResults = [];
+  renderList(els.adminUserSearchResults, [], adminSearchResultCard);
+  if (els.adminUserSearchHelp) {
+    els.adminUserSearchHelp.textContent = 'Busca por Telegram ID, nombre, código de referido o UID CoinW.';
+  }
+  resetAdminUserDetail();
 }
 
 async function loadAdminPanel() {
@@ -1014,5 +1216,7 @@ els.copyReferralCodeButton.addEventListener('click', copyReferralLink);
 els.copyFeeInvoiceButton.addEventListener('click', copyFeeInvoice);
 els.requestReferralPayoutButton.addEventListener('click', requestReferralPayout);
 els.refreshButton.addEventListener('click', () => loadDashboard({ refreshCapital: false }).catch((error) => showNotice('error', error.message)));
+if (els.adminUserSearchForm) els.adminUserSearchForm.addEventListener('submit', submitAdminUserSearch);
+if (els.adminUserSearchClearButton) els.adminUserSearchClearButton.addEventListener('click', clearAdminUserSearch);
 
 bootstrap();
