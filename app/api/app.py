@@ -134,9 +134,9 @@ def create_api_app() -> FastAPI:
 
     @app.get("/favicon.ico", include_in_schema=False)
     def favicon():
-        icon_path = WEB_ASSETS_DIR / "logo-mark.svg"
+        icon_path = WEB_ASSETS_DIR / "logo-mark.png"
         if icon_path.exists():
-            return FileResponse(icon_path, media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=3600"})
+            return FileResponse(icon_path, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
         return Response(status_code=204)
 
     @app.get(f"{API_PREFIX}/root", response_model=RootResponse)
