@@ -26,6 +26,10 @@ const els = {
   feeReportInput: document.getElementById('feeReportInput'),
   metricBotStatus: document.getElementById('metricBotStatus'),
   metricBotDetail: document.getElementById('metricBotDetail'),
+  topbarBotStatus: document.getElementById('topbarBotStatus'),
+  topbarBotDetail: document.getElementById('topbarBotDetail'),
+  topbarCapitalActivo: document.getElementById('topbarCapitalActivo'),
+  topbarCapitalTotal: document.getElementById('topbarCapitalTotal'),
   metricCapitalActivo: document.getElementById('metricCapitalActivo'),
   metricCapitalTotal: document.getElementById('metricCapitalTotal'),
   metricCapitalTotalCard: document.getElementById('metricCapitalTotalCard'),
@@ -207,8 +211,12 @@ function renderReadonlyPreview() {
   els.profileMeta.textContent = 'Abre la Mini App desde Telegram para autenticar la sesión y cargar datos reales.';
   els.metricBotStatus.textContent = 'Preview';
   els.metricBotDetail.textContent = 'Sin sesión Telegram';
+  els.topbarBotStatus.textContent = 'Preview';
+  els.topbarBotDetail.textContent = 'Sin sesión Telegram';
   els.metricCapitalActivo.textContent = '--';
   els.metricCapitalTotal.textContent = 'Capital total --';
+  els.topbarCapitalActivo.textContent = '--';
+  els.topbarCapitalTotal.textContent = 'Capital total --';
   els.metricCapitalTotalCard.textContent = '--';
   els.metricFeeDue.textContent = '--';
   els.metricFeeStatus.textContent = 'Sin autenticación';
@@ -338,17 +346,23 @@ function updateDashboardView(payload) {
   const stats = user.stats || {};
 
   els.metricBotStatus.textContent = user.bot_activo ? 'Activo' : 'Inactivo';
+  els.topbarBotStatus.textContent = user.bot_activo ? 'Activo' : 'Inactivo';
   if (!user.bot_activo) {
     els.metricBotDetail.textContent = 'Sin ejecución activa';
+    els.topbarBotDetail.textContent = 'Sin ejecución activa';
   } else if (user.trading_enabled) {
     els.metricBotDetail.textContent = 'Operativa habilitada';
+    els.topbarBotDetail.textContent = 'Operativa habilitada';
   } else {
     els.metricBotDetail.textContent = user.trading_pause_reason
       ? `Pausa: ${textOrDash(user.trading_pause_reason)}`
       : 'Operativa pausada';
+    els.topbarBotDetail.textContent = els.metricBotDetail.textContent;
   }
   els.metricCapitalActivo.textContent = formatMoney(user.capital_activo, user.payment_asset || 'USDT');
   els.metricCapitalTotal.textContent = `Capital total ${formatMoney(user.capital_total, user.payment_asset || 'USDT')}`;
+  els.topbarCapitalActivo.textContent = formatMoney(user.capital_activo, user.payment_asset || 'USDT');
+  els.topbarCapitalTotal.textContent = `Capital total ${formatMoney(user.capital_total, user.payment_asset || 'USDT')}`;
   els.metricCapitalTotalCard.textContent = formatMoney(user.capital_total, user.payment_asset || 'USDT');
   els.metricFeeDue.textContent = formatMoney(user.fee_due_total, user.payment_asset || 'USDT');
   els.metricFeeStatus.textContent = `Estado fee: ${textOrDash(user.fee_status)}`;
@@ -387,8 +401,10 @@ function updateDashboardView(payload) {
 
   if (user.bot_activo) {
     els.metricBotStatus.className = 'status-good';
+    els.topbarBotStatus.className = 'status-good';
   } else {
     els.metricBotStatus.className = '';
+    els.topbarBotStatus.className = '';
   }
 
   if (user.fee_due_total > 0) {
