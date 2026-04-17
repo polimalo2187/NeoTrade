@@ -28,6 +28,11 @@ const els = {
   feeReportInput: document.getElementById('feeReportInput'),
   copyReferralCodeButton: document.getElementById('copyReferralCodeButton'),
   copyFeeInvoiceButton: document.getElementById('copyFeeInvoiceButton'),
+  referralPayoutForm: document.getElementById('referralPayoutForm'),
+  coinwUidInput: document.getElementById('coinwUidInput'),
+  saveCoinwUidButton: document.getElementById('saveCoinwUidButton'),
+  requestReferralPayoutButton: document.getElementById('requestReferralPayoutButton'),
+  referralPayoutHint: document.getElementById('referralPayoutHint'),
   metricBotStatus: document.getElementById('metricBotStatus'),
   metricBotDetail: document.getElementById('metricBotDetail'),
   metricCapitalActivo: document.getElementById('metricCapitalActivo'),
@@ -42,9 +47,15 @@ const els = {
   detailTradingStatus: document.getElementById('detailTradingStatus'),
   detailTradingPause: document.getElementById('detailTradingPause'),
   detailEngineError: document.getElementById('detailEngineError'),
+  detailReferralCount: document.getElementById('detailReferralCount'),
   detailReferralDaily: document.getElementById('detailReferralDaily'),
   detailReferralTotal: document.getElementById('detailReferralTotal'),
+  detailReferralAvailable: document.getElementById('detailReferralAvailable'),
+  detailReferralReserved: document.getElementById('detailReferralReserved'),
   detailReferralLink: document.getElementById('detailReferralLink'),
+  detailReferralUid: document.getElementById('detailReferralUid'),
+  detailReferralMinimum: document.getElementById('detailReferralMinimum'),
+  detailReferralRequest: document.getElementById('detailReferralRequest'),
   detailActivePosition: document.getElementById('detailActivePosition'),
   detailUpdatedAt: document.getElementById('detailUpdatedAt'),
   detailTelegramId: document.getElementById('detailTelegramId'),
@@ -99,8 +110,8 @@ function formatMoney(value, asset = 'USDT') {
   return `${number.toFixed(2)} ${asset}`;
 }
 
-function formatDate(value) {
-  if (!value) return '--';
+function formatDate(value, fallback = 'Sin registro') {
+  if (!value) return fallback;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
   return new Intl.DateTimeFormat('es-ES', {
@@ -109,8 +120,13 @@ function formatDate(value) {
   }).format(date);
 }
 
-function textOrDash(value) {
-  if (value === null || value === undefined || value === '') return '--';
+function asNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function textOrDash(value, fallback = '--') {
+  if (value === null || value === undefined || value === '') return fallback;
   return String(value);
 }
 
@@ -130,9 +146,12 @@ function tradingStatusLabel(user) {
 }
 
 function paymentMethodLabel(value) {
-  if (!value) return '--';
-  if (value === 'coinw_internal') return 'Transferencia interna CoinW';
+  if (!value || value === 'coinw_internal') return 'Transferencia interna CoinW';
   return String(value);
+}
+
+function referralMinimumPayout() {
+  return asNumber(state.appInfo?.referral_payout_min_usdt, 3);
 }
 
 async function copyToClipboard(value) {
@@ -245,45 +264,57 @@ function setButtonsDisabled(disabled) {
     els.apiKeyInput,
     els.apiSecretInput,
     els.feeReportInput,
+    els.coinwUidInput,
+    els.saveCoinwUidButton,
+    els.requestReferralPayoutButton,
   ].forEach((element) => {
     element.disabled = disabled;
   });
 }
 
 function renderReadonlyPreview() {
+  const minimumPayout = referralMinimumPayout();
   els.profileName.textContent = 'Vista previa';
   els.profileMeta.textContent = 'Abre la Mini App desde Telegram para autenticar la sesión y cargar datos reales.';
   els.metricBotStatus.textContent = 'Preview';
   els.metricBotDetail.textContent = 'Sin sesión Telegram';
   els.topbarBotStatus?.textContent && (els.topbarBotStatus.textContent = 'Preview');
   els.topbarBotDetail?.textContent && (els.topbarBotDetail.textContent = 'Sin sesión Telegram');
-  els.metricCapitalActivo.textContent = '--';
-  els.metricCapitalTotal.textContent = 'Capital total --';
-  els.topbarCapitalActivo?.textContent && (els.topbarCapitalActivo.textContent = '--');
-  els.topbarCapitalTotal?.textContent && (els.topbarCapitalTotal.textContent = 'Capital total --');
-  els.metricCapitalTotalCard.textContent = '--';
-  els.metricFeeDue.textContent = '--';
+  els.metricCapitalActivo.textContent = formatMoney(0);
+  els.metricCapitalTotal.textContent = `Capital total ${formatMoney(0)}`;
+  els.topbarCapitalActivo?.textContent && (els.topbarCapitalActivo.textContent = formatMoney(0));
+  els.topbarCapitalTotal?.textContent && (els.topbarCapitalTotal.textContent = `Capital total ${formatMoney(0)}`);
+  els.metricCapitalTotalCard.textContent = formatMoney(0);
+  els.metricFeeDue.textContent = formatMoney(0);
   els.metricFeeStatus.textContent = 'Sin autenticación';
-  els.metricReferralsCount.textContent = '--';
-  els.metricReferralCode.textContent = 'Enlace --';
+  els.metricReferralsCount.textContent = '0';
+  els.metricReferralCode.textContent = 'Enlace no disponible';
   els.metricCredentials.textContent = 'Pendiente';
   els.metricMaskedKey.textContent = 'Abre desde Telegram';
   els.detailTradingStatus.textContent = 'No autenticado';
-  els.detailTradingPause.textContent = '--';
-  els.detailEngineError.textContent = '--';
-  els.detailReferralDaily.textContent = '--';
-  els.detailReferralTotal.textContent = '--';
-  els.detailReferralLink.textContent = '--';
-  els.detailActivePosition.textContent = '--';
-  els.detailTelegramId.textContent = '--';
-  els.detailPaymentMethod.textContent = '--';
-  els.detailFeeThreshold.textContent = '--';
-  els.detailUpdatedAt.textContent = '--';
+  els.detailTradingPause.textContent = 'Sin bloqueo';
+  els.detailEngineError.textContent = 'Sin error reciente';
+  els.detailReferralCount.textContent = '0';
+  els.detailReferralDaily.textContent = formatMoney(0);
+  els.detailReferralTotal.textContent = formatMoney(0);
+  els.detailReferralAvailable.textContent = formatMoney(0);
+  els.detailReferralReserved.textContent = formatMoney(0);
+  els.detailReferralLink.textContent = 'No disponible';
+  els.detailReferralUid.textContent = 'No configurado';
+  els.detailReferralMinimum.textContent = formatMoney(minimumPayout);
+  els.detailReferralRequest.textContent = 'No';
+  els.referralPayoutHint.textContent = `Abre la Mini App desde Telegram para gestionar tu UID y solicitar payouts desde ${formatMoney(minimumPayout)}.`;
+  els.detailActivePosition.textContent = 'No';
+  els.detailTelegramId.textContent = 'Sin sesión';
+  els.detailPaymentMethod.textContent = paymentMethodLabel('coinw_internal');
+  els.detailFeeThreshold.textContent = formatMoney(0);
+  els.detailUpdatedAt.textContent = 'Sin actualización';
   els.feeInvoiceBlock.textContent = 'Sin factura cargada en modo vista previa.';
   els.feeInvoiceBlock.classList.add('invoice-card--empty');
   els.feeMessage.textContent = 'Las instrucciones de fee aparecerán aquí cuando el usuario autenticado tenga una factura pendiente.';
   els.copyReferralCodeButton.disabled = true;
   els.copyFeeInvoiceButton.disabled = true;
+  els.requestReferralPayoutButton.disabled = true;
   setButtonsDisabled(true);
   renderList(els.operationsPanel, []);
   renderList(els.statesPanel, []);
@@ -329,7 +360,7 @@ function operationCard(item) {
   const symbol = textOrDash(item.symbol);
   const status = textOrDash(item.status);
   const side = textOrDash(item.side || item.direction);
-  const amount = item.quantity || item.amount || item.quote_amount || '--';
+  const amount = item.quantity || item.amount || item.quote_amount || '0';
   const body = `Orden ${textOrDash(item.order_number)} · ${side} · cantidad ${amount}`;
   return makeTimelineCard(
     `${symbol} · ${status}`,
@@ -409,29 +440,53 @@ function updateDashboardView(payload) {
       : 'Operativa pausada';
     if (els.topbarBotDetail) els.topbarBotDetail.textContent = els.metricBotDetail.textContent;
   }
-  els.metricCapitalActivo.textContent = formatMoney(user.capital_activo, user.payment_asset || 'USDT');
-  els.metricCapitalTotal.textContent = `Capital total ${formatMoney(user.capital_total, user.payment_asset || 'USDT')}`;
-  if (els.topbarCapitalActivo) els.topbarCapitalActivo.textContent = formatMoney(user.capital_activo, user.payment_asset || 'USDT');
-  if (els.topbarCapitalTotal) els.topbarCapitalTotal.textContent = `Capital total ${formatMoney(user.capital_total, user.payment_asset || 'USDT')}`;
-  els.metricCapitalTotalCard.textContent = formatMoney(user.capital_total, user.payment_asset || 'USDT');
-  els.metricFeeDue.textContent = formatMoney(user.fee_due_total, user.payment_asset || 'USDT');
-  els.metricFeeStatus.textContent = `Estado fee: ${textOrDash(user.fee_status)}`;
-  els.metricReferralsCount.textContent = textOrDash(referrals.referidos_activos);
-  els.metricReferralCode.textContent = referrals.enlace_referido ? 'Enlace listo para compartir' : 'Enlace --';
+  const asset = user.payment_asset || 'USDT';
+  const referralTotal = asNumber(referrals.referidos_totales, Array.isArray(referrals.referidos) ? referrals.referidos.length : 0);
+  const referralActive = asNumber(referrals.referidos_activos, 0);
+  const referralDaily = asNumber(referrals.ganancia_diaria, 0);
+  const referralAccumulated = asNumber(referrals.ganancia_acumulada, 0);
+  const referralAvailable = asNumber(referrals.saldo_disponible, 0);
+  const referralReserved = asNumber(referrals.saldo_reservado, 0);
+  const minimumPayout = asNumber(referrals.minimum_amount, referralMinimumPayout());
+  const feeDue = asNumber(user.fee_due_total, 0);
+  const capitalActivo = asNumber(user.capital_activo, 0);
+  const capitalTotal = asNumber(user.capital_total, 0);
+  const feeThreshold = asNumber(user.fee_threshold, 0);
+  const hasActivePayoutRequest = Boolean(referrals.has_active_payout_request || referrals.active_payout_request);
+
+  els.metricCapitalActivo.textContent = formatMoney(capitalActivo, asset);
+  els.metricCapitalTotal.textContent = `Capital total ${formatMoney(capitalTotal, asset)}`;
+  if (els.topbarCapitalActivo) els.topbarCapitalActivo.textContent = formatMoney(capitalActivo, asset);
+  if (els.topbarCapitalTotal) els.topbarCapitalTotal.textContent = `Capital total ${formatMoney(capitalTotal, asset)}`;
+  els.metricCapitalTotalCard.textContent = formatMoney(capitalTotal, asset);
+  els.metricFeeDue.textContent = formatMoney(feeDue, asset);
+  els.metricFeeStatus.textContent = `Estado fee: ${textOrDash(user.fee_status, 'clear')}`;
+  els.metricReferralsCount.textContent = String(referralActive);
+  els.metricReferralCode.textContent = referrals.enlace_referido ? 'Enlace listo para compartir' : 'Enlace no disponible';
   els.metricCredentials.textContent = user.has_api_credentials ? 'Configuradas' : 'Pendientes';
   els.metricMaskedKey.textContent = user.api_key_masked || 'Clave no cargada';
 
   els.detailTradingStatus.textContent = tradingStatusLabel(user);
   els.detailTradingPause.textContent = friendlyPauseReason(user.trading_pause_reason);
-  els.detailEngineError.textContent = textOrDash(user.last_engine_error || 'Sin error reciente');
-  els.detailReferralDaily.textContent = formatMoney(referrals.ganancia_diaria, user.payment_asset || 'USDT');
-  els.detailReferralTotal.textContent = formatMoney(referrals.ganancia_acumulada, user.payment_asset || 'USDT');
+  els.detailEngineError.textContent = textOrDash(user.last_engine_error || 'Sin error reciente', 'Sin error reciente');
+  els.detailReferralCount.textContent = String(referralTotal);
+  els.detailReferralDaily.textContent = formatMoney(referralDaily, asset);
+  els.detailReferralTotal.textContent = formatMoney(referralAccumulated, asset);
+  els.detailReferralAvailable.textContent = formatMoney(referralAvailable, asset);
+  els.detailReferralReserved.textContent = formatMoney(referralReserved, asset);
   els.detailReferralLink.textContent = referrals.enlace_referido ? 'Listo para compartir' : 'No disponible';
+  els.detailReferralUid.textContent = textOrDash(referrals.coinw_uid, 'No configurado');
+  els.detailReferralMinimum.textContent = formatMoney(minimumPayout, asset);
+  els.detailReferralRequest.textContent = referrals.active_payout_request
+    ? `${textOrDash(referrals.active_payout_request.status, 'requested')} · ${formatMoney(asNumber(referrals.active_payout_request.amount_requested, 0), asset)}`
+    : 'No';
+  els.referralPayoutHint.textContent = referrals.payout_request_reason || `Mínimo ${formatMoney(minimumPayout, asset)} · cooldown ${asNumber(referrals.cooldown_hours, 24)}h`;
+  els.coinwUidInput.value = referrals.coinw_uid || '';
   els.detailActivePosition.textContent = user.active_position ? 'Sí' : 'No';
-  els.detailTelegramId.textContent = textOrDash(user.telegram_id);
+  els.detailTelegramId.textContent = textOrDash(user.telegram_id, 'Sin ID');
   els.detailPaymentMethod.textContent = paymentMethodLabel(user.payment_method);
-  els.detailFeeThreshold.textContent = formatMoney(user.fee_threshold, user.payment_asset || 'USDT');
-  els.detailUpdatedAt.textContent = formatDate(user.updated_at);
+  els.detailFeeThreshold.textContent = formatMoney(feeThreshold, asset);
+  els.detailUpdatedAt.textContent = formatDate(user.updated_at, 'Sin actualización');
 
   const profileName = user.nombre || state.telegramIdentity?.first_name || 'Usuario';
   const usernameText = state.telegramIdentity?.username ? `@${state.telegramIdentity.username}` : 'Cuenta Telegram autenticada';
@@ -456,6 +511,7 @@ function updateDashboardView(payload) {
   els.resumeTradingButton.disabled = !user.bot_activo || user.trading_pause_reason === 'fee_due' || user.trading_enabled;
   els.copyReferralCodeButton.disabled = !referrals.enlace_referido;
   els.copyFeeInvoiceButton.disabled = !invoice;
+  els.requestReferralPayoutButton.disabled = !Boolean(referrals.can_request_payout) || hasActivePayoutRequest;
 
   if (user.bot_activo) {
     els.metricBotStatus.className = 'status-good';
@@ -596,6 +652,44 @@ async function copyFeeInvoice() {
   }
 }
 
+async function saveReferralCoinwUid(event) {
+  event.preventDefault();
+  clearNotice();
+  const coinwUid = els.coinwUidInput.value.trim();
+  if (!coinwUid) {
+    showNotice('error', 'Debes introducir tu UID de CoinW.');
+    return;
+  }
+  els.saveCoinwUidButton.disabled = true;
+  try {
+    await fetchJson(`${apiPrefix()}/me/referrals/coinw-uid`, {
+      method: 'POST',
+      body: JSON.stringify({ coinw_uid: coinwUid }),
+    });
+    showNotice('success', 'UID de CoinW guardado correctamente.');
+    await loadDashboard();
+  } catch (error) {
+    showNotice('error', error.message);
+  } finally {
+    els.saveCoinwUidButton.disabled = false;
+  }
+}
+
+async function requestReferralPayout() {
+  clearNotice();
+  els.requestReferralPayoutButton.disabled = true;
+  try {
+    const payload = await fetchJson(`${apiPrefix()}/me/referrals/payout-request`, { method: 'POST' });
+    const amount = payload?.request?.amount_requested || payload?.request?.amount_reserved || 0;
+    showNotice('success', `Solicitud de payout creada por ${formatMoney(amount)}.`);
+    await loadDashboard();
+  } catch (error) {
+    showNotice('error', error.message);
+  } finally {
+    els.requestReferralPayoutButton.disabled = false;
+  }
+}
+
 async function refreshCapital() {
   clearNotice();
   els.refreshCapitalButton.disabled = true;
@@ -672,6 +766,7 @@ async function bootstrap() {
 
 els.credentialsForm.addEventListener('submit', submitCredentials);
 els.feeReportForm.addEventListener('submit', sendFeeReport);
+els.referralPayoutForm.addEventListener('submit', saveReferralCoinwUid);
 els.activateButton.addEventListener('click', activateBot);
 els.pauseTradingButton.addEventListener('click', pauseTrading);
 els.resumeTradingButton.addEventListener('click', resumeTrading);
@@ -679,6 +774,7 @@ els.deactivateButton.addEventListener('click', deactivateBot);
 els.refreshCapitalButton.addEventListener('click', refreshCapital);
 els.copyReferralCodeButton.addEventListener('click', copyReferralLink);
 els.copyFeeInvoiceButton.addEventListener('click', copyFeeInvoice);
+els.requestReferralPayoutButton.addEventListener('click', requestReferralPayout);
 els.refreshButton.addEventListener('click', () => loadDashboard({ refreshCapital: false }).catch((error) => showNotice('error', error.message)));
 
 bootstrap();
