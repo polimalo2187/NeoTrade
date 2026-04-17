@@ -49,6 +49,14 @@ class ApiCredentialUpdateResult:
     reason: Optional[str] = None
 
 
+@dataclass
+class TradingToggleResult:
+    status: str
+    user: Optional[Dict[str, Any]] = None
+    reason: Optional[str] = None
+    invoice: Optional[Dict[str, Any]] = None
+
+
 class UserTradingService:
     def __init__(self, fee_manager: Optional[FeeManager] = None):
         self.fee_manager = fee_manager or FeeManager()
@@ -166,6 +174,34 @@ class UserTradingService:
 
     def deactivate_bot(self, telegram_id: int) -> None:
         UsuarioModel.set_bot_activo(telegram_id, False)
+
+    def pause_trading(self, telegram_id: int) -> TradingToggleResult:
+        usuario = self.get_user(telegram_id)
+        if not usuario:
+            return TradingToggleResult(status="user_not_found")
+        if usuario.get("trading_pause_reason") == "fee_due":
+            return TradingToggleResult(
+                status="fee_locked",
+                user=usuario,
+                reason="El trading está bloqueado por fee pendiente",
+                invoice=self.get_fee_invoice(telegram_id),
+            )
+        UsuarioModel.pausar_trading_manual(telegram_id)
+        return TradingToggleResult(status="paused", user=self.get_user(telegram_id) or usuario)
+
+    def resume_trading(self, telegram_id: int) -> TradingToggleResult:
+        usuario = self.get_user(telegram_id)
+        if not usuario:
+            return TradingToggleResult(status="user_not_found")
+        if usuario.get("trading_pause_reason") == "fee_due" or float(usuario.get("fee_due_total", 0) or 0) > 0:
+            return TradingToggleResult(
+                status="fee_locked",
+                user=usuario,
+                reason="No puedes reanudar el trading mientras exista fee pendiente",
+                invoice=self.get_fee_invoice(telegram_id),
+            )
+        UsuarioModel.reanudar_trading_manual(telegram_id)
+        return TradingToggleResult(status="resumed", user=self.get_user(telegram_id) or usuario)
 
     def refresh_capital(self, telegram_id: int) -> CapitalSnapshotResult:
         usuario = self.get_user(telegram_id)
@@ -329,7 +365,9 @@ class UserTradingService:
             "fee_due_total": float(usuario.get("fee_due_total", 0) or 0),
             "fee_paid_total": float(usuario.get("fee_paid_total", 0) or 0),
             "fee_threshold": float(usuario.get("fee_threshold", 0) or 0),
+            "fee_percent": float(usuario.get("fee_percent", 0) or 0),
             "payment_asset": usuario.get("payment_asset") or PAYMENT_ASSET,
+            "payment_method": usuario.get("payment_method") or "coinw_internal",
             "capital_total": float(usuario.get("capital_total", 0) or 0),
             "capital_activo": float(usuario.get("capital_activo", 0) or 0),
             "active_position": usuario.get("active_position"),
