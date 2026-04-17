@@ -390,26 +390,6 @@ class UserTradingService:
         if not usuario:
             return None
 
-    def admin_refresh_user_capital(self, telegram_id: int) -> CapitalSnapshotResult:
-        return self.refresh_capital(telegram_id)
-
-    def admin_activate_user_bot(self, telegram_id: int) -> BotActivationResult:
-        return self.activate_bot(telegram_id)
-
-    def admin_deactivate_user_bot(self, telegram_id: int) -> TradingToggleResult:
-        usuario = self.get_user(telegram_id)
-        if not usuario:
-            return TradingToggleResult(status="user_not_found")
-        self.deactivate_bot(telegram_id)
-        return TradingToggleResult(status="deactivated", user=self.get_user(telegram_id) or usuario)
-
-    def admin_pause_user_trading(self, telegram_id: int) -> TradingToggleResult:
-        return self.pause_trading(telegram_id)
-
-    def admin_resume_user_trading(self, telegram_id: int) -> TradingToggleResult:
-        return self.resume_trading(telegram_id)
-
-
         public = self.serialize_user_public(usuario)
         referrals = self.get_referral_summary(telegram_id)
         fee_invoice = self.get_fee_invoice(telegram_id)
@@ -466,6 +446,25 @@ class UserTradingService:
             "recent_trade_states": self.get_recent_trade_states(telegram_id, limit=5),
             "recent_trade_events": self.get_recent_trade_events(telegram_id, limit=5),
         }
+
+    def admin_refresh_user_capital(self, telegram_id: int) -> CapitalSnapshotResult:
+        return self.refresh_capital(telegram_id)
+
+    def admin_activate_user_bot(self, telegram_id: int) -> BotActivationResult:
+        return self.activate_bot(telegram_id)
+
+    def admin_deactivate_user_bot(self, telegram_id: int) -> TradingToggleResult:
+        usuario = self.get_user(telegram_id)
+        if not usuario:
+            return TradingToggleResult(status="user_not_found")
+        self.deactivate_bot(telegram_id)
+        return TradingToggleResult(status="deactivated", user=self.get_user(telegram_id) or usuario)
+
+    def admin_pause_user_trading(self, telegram_id: int) -> TradingToggleResult:
+        return self.pause_trading(telegram_id)
+
+    def admin_resume_user_trading(self, telegram_id: int) -> TradingToggleResult:
+        return self.resume_trading(telegram_id)
 
     def begin_api_key_capture(self, telegram_id: int) -> None:
         UsuarioModel.actualizar_usuario({"telegram_id": telegram_id}, {"estado": "esperando_api_key"})
