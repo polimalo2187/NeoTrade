@@ -613,6 +613,7 @@ async function loadDashboard({ refreshCapital = false } = {}) {
     refresh_capital: String(refreshCapital),
   });
   const payload = await fetchJson(`${apiPrefix()}/me/dashboard?${query.toString()}`);
+  setButtonsDisabled(false);
   updateDashboardView(payload);
   setConnectionBadge('success', 'Conectado');
   els.app.classList.remove('shell--loading');
@@ -818,6 +819,7 @@ function setupTabs() {
 
 async function bootstrap() {
   setupTabs();
+  bindCredentialFieldHelpers();
   setButtonsDisabled(true);
   try {
     await loadAppInfo();
