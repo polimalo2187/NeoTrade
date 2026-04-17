@@ -65,13 +65,12 @@ img {
 
 .topbar {
   position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(260px, 0.8fr);
-  align-items: end;
-  gap: 20px;
-  padding: 22px;
+  display: flex;
+  align-items: stretch;
+  padding: 24px;
   margin-bottom: 16px;
   overflow: hidden;
+  min-height: 420px;
 }
 
 .topbar::before {
@@ -88,15 +87,17 @@ img {
   position: relative;
   z-index: 1;
   display: flex;
-  align-items: flex-end;
+  width: 100%;
   min-width: 0;
 }
 
 .brand__stack {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 18px;
   min-width: 0;
+  width: 100%;
+  min-height: 100%;
 }
 
 .brand__logo {
@@ -104,8 +105,17 @@ img {
   align-items: center;
 }
 
+.brand__hero {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 0;
+}
+
 .brand__logo--hero {
-  max-width: min(420px, 78vw);
+  max-width: min(760px, 100%);
+  width: 100%;
 }
 
 .brand__logo img {
@@ -115,12 +125,22 @@ img {
   object-fit: contain;
 }
 
+.brand__logo--hero img {
+  transform: scale(1.12);
+  transform-origin: center center;
+}
+
+.brand__footer {
+  display: grid;
+  gap: 16px;
+}
+
 .brand__subtitle {
   margin: 0;
-  max-width: 520px;
+  max-width: 680px;
   color: var(--muted);
-  line-height: 1.55;
-  font-size: 1rem;
+  line-height: 1.5;
+  font-size: clamp(1rem, 1.6vw, 1.12rem);
 }
 
 .eyebrow {
@@ -131,54 +151,11 @@ img {
   color: var(--muted);
 }
 
-.topbar__side {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  gap: 14px;
-}
-
 .topbar__meta {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 10px;
-}
-
-.topbar__stats {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.topbar-stat {
-  min-height: 96px;
-  padding: 16px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(148, 163, 184, 0.10);
-}
-
-.topbar-stat__label {
-  display: block;
-  color: var(--muted);
-  font-size: 0.74rem;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-}
-
-.topbar-stat strong {
-  display: block;
-  margin-top: 10px;
-  font-size: clamp(1.16rem, 1.8vw, 1.45rem);
-  line-height: 1.1;
-}
-
-.topbar-stat small {
-  display: block;
-  margin-top: 8px;
-  color: var(--muted);
-  line-height: 1.4;
 }
 
 .badge {
@@ -613,14 +590,14 @@ textarea:focus {
 
   .actions-grid,
   .split-layout,
-  .hero,
-  .topbar {
+  .hero {
     grid-template-columns: 1fr;
   }
 
-  .topbar__meta {
-    justify-content: flex-start;
+  .topbar {
+    min-height: 380px;
   }
+
 }
 
 @media (max-width: 720px) {
@@ -635,22 +612,25 @@ textarea:focus {
     padding: 16px;
   }
 
+  .topbar {
+    min-height: 320px;
+  }
+
   .brand__logo--hero {
-    max-width: min(320px, 82vw);
+    max-width: 100%;
+  }
+
+  .brand__logo--hero img {
+    transform: scale(1.08);
   }
 
   .brand__subtitle {
     font-size: 0.96rem;
   }
 
-  .topbar__stats,
   .metrics-grid,
   .button-row {
     grid-template-columns: 1fr;
-  }
-
-  .topbar-stat {
-    min-height: 0;
   }
 
   .metric-card strong {
