@@ -25,6 +25,11 @@ const els = {
   feeReportForm: document.getElementById('feeReportForm'),
   apiKeyInput: document.getElementById('apiKeyInput'),
   apiSecretInput: document.getElementById('apiSecretInput'),
+  pasteApiKeyButton: document.getElementById('pasteApiKeyButton'),
+  clearApiKeyButton: document.getElementById('clearApiKeyButton'),
+  pasteApiSecretButton: document.getElementById('pasteApiSecretButton'),
+  clearApiSecretButton: document.getElementById('clearApiSecretButton'),
+  toggleApiSecretButton: document.getElementById('toggleApiSecretButton'),
   feeReportInput: document.getElementById('feeReportInput'),
   copyReferralCodeButton: document.getElementById('copyReferralCodeButton'),
   copyFeeInvoiceButton: document.getElementById('copyFeeInvoiceButton'),
@@ -150,6 +155,68 @@ function paymentMethodLabel(value) {
   return String(value);
 }
 
+function focusInput(input) {
+  if (!input) return;
+  input.disabled = false;
+  input.focus();
+  input.removeAttribute('readonly');
+  if (typeof input.setSelectionRange === 'function') {
+    const end = input.value?.length || 0;
+    input.setSelectionRange(end, end);
+  } else if (typeof input.select === 'function') {
+    input.select();
+  }
+}
+
+async function pasteClipboardIntoInput(input, label) {
+  clearNotice();
+  try {
+    if (!navigator.clipboard?.readText) {
+      focusInput(input);
+      showNotice('error', `Tu dispositivo no permite pegar automáticamente en ${label}. Toca el campo y usa pegar desde el teclado.`);
+      return;
+    }
+    const text = await navigator.clipboard.readText();
+    if (!text) {
+      throw new Error(`El portapapeles está vacío. Copia primero tu ${label}.`);
+    }
+    input.value = text.trim();
+    focusInput(input);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    showNotice('success', `${label} pegado desde el portapapeles.`);
+  } catch (error) {
+    focusInput(input);
+    showNotice('error', error.message || `No se pudo pegar ${label}. Toca el campo y usa pegar desde el teclado.`);
+  }
+}
+
+function clearInputValue(input) {
+  if (!input) return;
+  input.value = '';
+  focusInput(input);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function toggleApiSecretVisibility() {
+  const isPassword = els.apiSecretInput.type === 'password';
+  els.apiSecretInput.type = isPassword ? 'text' : 'password';
+  els.toggleApiSecretButton.textContent = isPassword ? 'Ocultar' : 'Mostrar';
+  focusInput(els.apiSecretInput);
+}
+
+function bindCredentialFieldHelpers() {
+  [els.apiKeyInput, els.apiSecretInput].forEach((input) => {
+    input.addEventListener('focus', () => focusInput(input));
+    input.addEventListener('click', () => focusInput(input));
+  });
+
+  els.pasteApiKeyButton.addEventListener('click', () => pasteClipboardIntoInput(els.apiKeyInput, 'API Key'));
+  els.clearApiKeyButton.addEventListener('click', () => clearInputValue(els.apiKeyInput));
+  els.pasteApiSecretButton.addEventListener('click', () => pasteClipboardIntoInput(els.apiSecretInput, 'API Secret'));
+  els.clearApiSecretButton.addEventListener('click', () => clearInputValue(els.apiSecretInput));
+  els.toggleApiSecretButton.addEventListener('click', toggleApiSecretVisibility);
+}
+
 function referralMinimumPayout() {
   return asNumber(state.appInfo?.referral_payout_min_usdt, 3);
 }
@@ -263,6 +330,11 @@ function setButtonsDisabled(disabled) {
     els.sendFeeReportButton,
     els.apiKeyInput,
     els.apiSecretInput,
+    els.pasteApiKeyButton,
+    els.clearApiKeyButton,
+    els.pasteApiSecretButton,
+    els.clearApiSecretButton,
+    els.toggleApiSecretButton,
     els.feeReportInput,
     els.coinwUidInput,
     els.saveCoinwUidButton,
