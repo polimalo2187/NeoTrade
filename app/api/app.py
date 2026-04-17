@@ -465,7 +465,7 @@ def create_api_app() -> FastAPI:
         results = service.admin_search_users(query, limit=limit)
         return _json({"query": query, "count": len(results), "results": results})
 
-    @app.get(f"{API_PREFIX}/admin/users/{telegram_id}")
+    @app.get(f"{API_PREFIX}/admin/users/{{telegram_id}}")
     def admin_user_detail(telegram_id: int, current_admin: AuthenticatedUser = Depends(get_admin_user)):
         detail = service.admin_get_user_detail(telegram_id)
         if not detail:
