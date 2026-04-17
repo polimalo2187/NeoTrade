@@ -134,11 +134,42 @@
             <form id="credentialsForm" class="form-stack">
               <label>
                 <span>API Key</span>
-                <input id="apiKeyInput" name="apiKey" type="text" autocomplete="off" placeholder="Pega aquí tu API Key" />
+                <div class="input-action-group">
+                  <input
+                    id="apiKeyInput"
+                    name="apiKey"
+                    type="text"
+                    autocomplete="off"
+                    autocorrect="off"
+                    autocapitalize="none"
+                    spellcheck="false"
+                    placeholder="Pega aquí tu API Key"
+                  />
+                  <div class="input-action-row">
+                    <button id="pasteApiKeyButton" class="button button--ghost button--small" type="button">Pegar</button>
+                    <button id="clearApiKeyButton" class="button button--ghost button--small" type="button">Limpiar</button>
+                  </div>
+                </div>
               </label>
               <label>
                 <span>API Secret</span>
-                <input id="apiSecretInput" name="apiSecret" type="password" autocomplete="off" placeholder="Pega aquí tu API Secret" />
+                <div class="input-action-group">
+                  <input
+                    id="apiSecretInput"
+                    name="apiSecret"
+                    type="password"
+                    autocomplete="off"
+                    autocorrect="off"
+                    autocapitalize="none"
+                    spellcheck="false"
+                    placeholder="Pega aquí tu API Secret"
+                  />
+                  <div class="input-action-row">
+                    <button id="toggleApiSecretButton" class="button button--ghost button--small" type="button">Mostrar</button>
+                    <button id="pasteApiSecretButton" class="button button--ghost button--small" type="button">Pegar</button>
+                    <button id="clearApiSecretButton" class="button button--ghost button--small" type="button">Limpiar</button>
+                  </div>
+                </div>
               </label>
               <button id="saveCredentialsButton" class="button button--primary" type="submit">Guardar credenciales</button>
             </form>
