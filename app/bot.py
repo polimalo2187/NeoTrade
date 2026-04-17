@@ -9,6 +9,8 @@ from app.services.user_trading_service import UserTradingService
 
 logger = logging.getLogger(__name__)
 
+COINW_REGISTER_URL = "https://www.coinw.com/es_ES/register?r=26534383"
+
 
 class Bot:
     def __init__(self):
@@ -30,9 +32,18 @@ class Bot:
         saludo = f"Hola {nombre_usuario}.\n\n" if nombre_usuario else ""
         return (
             f"{saludo}"
-            "NeoTrade ahora se utiliza desde la Mini App.\n\n"
-            "Telegram queda solo como puerta de entrada y canal de notificaciones. "
-            "Pulsa el botón de abajo para abrir la plataforma."
+            "🚀 Bienvenido a NeoTrade\n\n"
+            "NeoTrade es una plataforma de trading automático en Spot diseñada para operar de forma profesional, "
+            "rápida y centralizada desde nuestra Mini App.\n\n"
+            "Desde la Mini App podrás:\n"
+            "• conectar tu cuenta del exchange\n"
+            "• activar o pausar tu bot\n"
+            "• supervisar capital, estado operativo y actividad\n"
+            "• gestionar referidos, comisiones y más\n\n"
+            "⚠️ Importante: para usar NeoTrade es obligatorio registrarte en CoinW, ya que es el exchange donde opera el bot.\n\n"
+            f"Registro en CoinW:\n{COINW_REGISTER_URL}\n\n"
+            "Cuando ya tengas tu cuenta lista, entra directamente aquí:\n\n"
+            "👇 Abre la Mini App y configura tu operativa en Spot"
         )
 
     def _mini_app_markup(self) -> InlineKeyboardMarkup | None:
