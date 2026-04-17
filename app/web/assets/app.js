@@ -338,7 +338,15 @@ function updateDashboardView(payload) {
   const stats = user.stats || {};
 
   els.metricBotStatus.textContent = user.bot_activo ? 'Activo' : 'Inactivo';
-  els.metricBotDetail.textContent = user.trading_enabled ? 'Trading habilitado' : `Pausa: ${textOrDash(user.trading_pause_reason)}`;
+  if (!user.bot_activo) {
+    els.metricBotDetail.textContent = 'Sin ejecución activa';
+  } else if (user.trading_enabled) {
+    els.metricBotDetail.textContent = 'Operativa habilitada';
+  } else {
+    els.metricBotDetail.textContent = user.trading_pause_reason
+      ? `Pausa: ${textOrDash(user.trading_pause_reason)}`
+      : 'Operativa pausada';
+  }
   els.metricCapitalActivo.textContent = formatMoney(user.capital_activo, user.payment_asset || 'USDT');
   els.metricCapitalTotal.textContent = `Capital total ${formatMoney(user.capital_total, user.payment_asset || 'USDT')}`;
   els.metricCapitalTotalCard.textContent = formatMoney(user.capital_total, user.payment_asset || 'USDT');
