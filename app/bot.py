@@ -93,6 +93,7 @@ class Bot:
             ("📊 Operaciones recientes", "admin_historial"),
             ("🔗 Referidos", "admin_referidos"),
             ("🧾 Fees pendientes", "admin_fee_pendientes"),
+            ("💸 Payouts referidos", "admin_referral_payouts"),
             ("⛔ Usuarios bloqueados", "admin_usuarios_bloqueados"),
         ]
         for text_btn, callback in admin_buttons:
@@ -150,6 +151,8 @@ class Bot:
         if query.data == "NAV_REFERIDOS":
             self.user_service.reset_navigation_state(telegram_id)
             usuario_nav = self.user_service.get_user(telegram_id) or {}
+            referral_summary = self.user_service.get_referral_summary(telegram_id)
+            usuario_nav = {**usuario_nav, "total_referidos": referral_summary.get("referidos_totales", 0)}
             await query.edit_message_text(
                 mensaje_referidos(usuario_nav),
                 reply_markup=self._navigation_keyboard("NAV_MAIN"),
@@ -233,8 +236,10 @@ class Bot:
             return
 
         if query.data == "🔗 Referidos":
+            referral_summary = self.user_service.get_referral_summary(telegram_id)
+            usuario_ref = {**usuario, "total_referidos": referral_summary.get("referidos_totales", 0)}
             await query.edit_message_text(
-                mensaje_referidos(usuario),
+                mensaje_referidos(usuario_ref),
                 reply_markup=self._navigation_keyboard("NAV_MAIN"),
             )
             return
