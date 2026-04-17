@@ -82,6 +82,7 @@ class AppInfoResponse(BaseModel):
     mini_app_url: str
     api_prefix: str
     admin_ids_configured: int
+    referral_payout_min_usdt: float
 
 
 class RootResponse(BaseModel):
@@ -175,6 +176,7 @@ def create_api_app() -> FastAPI:
             mini_app_url=MINI_APP_URL,
             api_prefix=API_PREFIX,
             admin_ids_configured=len(ADMIN_TELEGRAM_IDS),
+            referral_payout_min_usdt=float(REFERRAL_PAYOUT_MIN_USDT),
         )
 
     @app.post(f"{API_PREFIX}/auth/telegram")
