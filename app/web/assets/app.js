@@ -15,6 +15,8 @@ const els = {
   globalSuccess: document.getElementById('globalSuccess'),
   refreshButton: document.getElementById('refreshButton'),
   refreshCapitalButton: document.getElementById('refreshCapitalButton'),
+  pauseTradingButton: document.getElementById('pauseTradingButton'),
+  resumeTradingButton: document.getElementById('resumeTradingButton'),
   activateButton: document.getElementById('activateButton'),
   deactivateButton: document.getElementById('deactivateButton'),
   saveCredentialsButton: document.getElementById('saveCredentialsButton'),
@@ -24,6 +26,8 @@ const els = {
   apiKeyInput: document.getElementById('apiKeyInput'),
   apiSecretInput: document.getElementById('apiSecretInput'),
   feeReportInput: document.getElementById('feeReportInput'),
+  copyReferralCodeButton: document.getElementById('copyReferralCodeButton'),
+  copyFeeInvoiceButton: document.getElementById('copyFeeInvoiceButton'),
   metricBotStatus: document.getElementById('metricBotStatus'),
   metricBotDetail: document.getElementById('metricBotDetail'),
   metricCapitalActivo: document.getElementById('metricCapitalActivo'),
@@ -42,6 +46,9 @@ const els = {
   detailReferralTotal: document.getElementById('detailReferralTotal'),
   detailActivePosition: document.getElementById('detailActivePosition'),
   detailUpdatedAt: document.getElementById('detailUpdatedAt'),
+  detailTelegramId: document.getElementById('detailTelegramId'),
+  detailPaymentMethod: document.getElementById('detailPaymentMethod'),
+  detailFeeThreshold: document.getElementById('detailFeeThreshold'),
   profileName: document.getElementById('profileName'),
   profileMeta: document.getElementById('profileMeta'),
   feeInvoiceBlock: document.getElementById('feeInvoiceBlock'),
@@ -104,6 +111,44 @@ function formatDate(value) {
 function textOrDash(value) {
   if (value === null || value === undefined || value === '') return '--';
   return String(value);
+}
+
+function friendlyPauseReason(value) {
+  if (!value) return 'Sin bloqueo';
+  if (value === 'fee_due') return 'Bloqueado por fee pendiente';
+  if (value === 'manual_pause') return 'Pausa manual';
+  return String(value);
+}
+
+function tradingStatusLabel(user) {
+  if (!user?.bot_activo) return 'Bot detenido';
+  if (user.trading_pause_reason === 'fee_due') return 'Bloqueado por fee';
+  if (!user.trading_enabled && user.trading_pause_reason === 'manual_pause') return 'Pausa manual';
+  if (!user.trading_enabled) return 'Pausado';
+  return 'Habilitado';
+}
+
+function paymentMethodLabel(value) {
+  if (!value) return '--';
+  if (value === 'coinw_internal') return 'Transferencia interna CoinW';
+  return String(value);
+}
+
+async function copyToClipboard(value) {
+  if (!value) throw new Error('No hay información disponible para copiar.');
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const area = document.createElement('textarea');
+  area.value = value;
+  area.setAttribute('readonly', 'readonly');
+  area.style.position = 'absolute';
+  area.style.left = '-9999px';
+  document.body.appendChild(area);
+  area.select();
+  document.execCommand('copy');
+  document.body.removeChild(area);
 }
 
 async function fetchJson(path, options = {}) {
@@ -191,6 +236,8 @@ function setButtonsDisabled(disabled) {
     els.refreshButton,
     els.refreshCapitalButton,
     els.activateButton,
+    els.pauseTradingButton,
+    els.resumeTradingButton,
     els.deactivateButton,
     els.saveCredentialsButton,
     els.sendFeeReportButton,
@@ -226,10 +273,15 @@ function renderReadonlyPreview() {
   els.detailReferralDaily.textContent = '--';
   els.detailReferralTotal.textContent = '--';
   els.detailActivePosition.textContent = '--';
+  els.detailTelegramId.textContent = '--';
+  els.detailPaymentMethod.textContent = '--';
+  els.detailFeeThreshold.textContent = '--';
   els.detailUpdatedAt.textContent = '--';
   els.feeInvoiceBlock.textContent = 'Sin factura cargada en modo vista previa.';
   els.feeInvoiceBlock.classList.add('invoice-card--empty');
   els.feeMessage.textContent = 'Las instrucciones de fee aparecerán aquí cuando el usuario autenticado tenga una factura pendiente.';
+  els.copyReferralCodeButton.disabled = true;
+  els.copyFeeInvoiceButton.disabled = true;
   setButtonsDisabled(true);
   renderList(els.operationsPanel, []);
   renderList(els.statesPanel, []);
@@ -351,7 +403,7 @@ function updateDashboardView(payload) {
     if (els.topbarBotDetail) els.topbarBotDetail.textContent = 'Operativa habilitada';
   } else {
     els.metricBotDetail.textContent = user.trading_pause_reason
-      ? `Pausa: ${textOrDash(user.trading_pause_reason)}`
+      ? friendlyPauseReason(user.trading_pause_reason)
       : 'Operativa pausada';
     if (els.topbarBotDetail) els.topbarBotDetail.textContent = els.metricBotDetail.textContent;
   }
@@ -367,12 +419,15 @@ function updateDashboardView(payload) {
   els.metricCredentials.textContent = user.has_api_credentials ? 'Configuradas' : 'Pendientes';
   els.metricMaskedKey.textContent = user.api_key_masked || 'Clave no cargada';
 
-  els.detailTradingStatus.textContent = user.trading_enabled ? 'Habilitado' : 'Pausado';
-  els.detailTradingPause.textContent = textOrDash(user.trading_pause_reason || 'Sin bloqueo');
+  els.detailTradingStatus.textContent = tradingStatusLabel(user);
+  els.detailTradingPause.textContent = friendlyPauseReason(user.trading_pause_reason);
   els.detailEngineError.textContent = textOrDash(user.last_engine_error || 'Sin error reciente');
   els.detailReferralDaily.textContent = formatMoney(referrals.ganancia_diaria, user.payment_asset || 'USDT');
   els.detailReferralTotal.textContent = formatMoney(referrals.ganancia_acumulada, user.payment_asset || 'USDT');
   els.detailActivePosition.textContent = user.active_position ? 'Sí' : 'No';
+  els.detailTelegramId.textContent = textOrDash(user.telegram_id);
+  els.detailPaymentMethod.textContent = paymentMethodLabel(user.payment_method);
+  els.detailFeeThreshold.textContent = formatMoney(user.fee_threshold, user.payment_asset || 'USDT');
   els.detailUpdatedAt.textContent = formatDate(user.updated_at);
 
   const profileName = user.nombre || state.telegramIdentity?.first_name || 'Usuario';
@@ -394,6 +449,10 @@ function updateDashboardView(payload) {
   els.deactivateButton.disabled = false;
   els.sendFeeReportButton.disabled = !invoice;
   els.feeReportInput.disabled = !invoice;
+  els.pauseTradingButton.disabled = !user.bot_activo || user.trading_pause_reason === 'fee_due' || (!user.trading_enabled && user.trading_pause_reason === 'manual_pause');
+  els.resumeTradingButton.disabled = !user.bot_activo || user.trading_pause_reason === 'fee_due' || user.trading_enabled;
+  els.copyReferralCodeButton.disabled = !referrals.codigo_referido;
+  els.copyFeeInvoiceButton.disabled = !invoice;
 
   if (user.bot_activo) {
     els.metricBotStatus.className = 'status-good';
@@ -426,7 +485,6 @@ async function loadDashboard({ refreshCapital = false } = {}) {
   updateDashboardView(payload);
   setConnectionBadge('success', 'Conectado');
   els.app.classList.remove('shell--loading');
-  setButtonsDisabled(false);
 }
 
 async function submitCredentials(event) {
@@ -479,6 +537,59 @@ async function deactivateBot() {
     showNotice('error', error.message);
   } finally {
     els.deactivateButton.disabled = false;
+  }
+}
+
+async function pauseTrading() {
+  clearNotice();
+  els.pauseTradingButton.disabled = true;
+  try {
+    await fetchJson(`${apiPrefix()}/me/trading/pause`, { method: 'POST' });
+    showNotice('success', 'Trading pausado manualmente. El manager seguirá gestionando posiciones abiertas.');
+    await loadDashboard();
+  } catch (error) {
+    showNotice('error', error.message);
+  } finally {
+    els.pauseTradingButton.disabled = false;
+  }
+}
+
+async function resumeTrading() {
+  clearNotice();
+  els.resumeTradingButton.disabled = true;
+  try {
+    await fetchJson(`${apiPrefix()}/me/trading/resume`, { method: 'POST' });
+    showNotice('success', 'Trading reanudado correctamente.');
+    await loadDashboard();
+  } catch (error) {
+    showNotice('error', error.message);
+  } finally {
+    els.resumeTradingButton.disabled = false;
+  }
+}
+
+async function copyReferralCode() {
+  clearNotice();
+  try {
+    const code = state.dashboard?.referrals?.codigo_referido;
+    await copyToClipboard(code);
+    showNotice('success', 'Código de referido copiado.');
+  } catch (error) {
+    showNotice('error', error.message);
+  }
+}
+
+async function copyFeeInvoice() {
+  clearNotice();
+  try {
+    const text = invoiceText(state.dashboard?.fee_invoice || null);
+    if (!state.dashboard?.fee_invoice) {
+      throw new Error('No hay factura activa para copiar.');
+    }
+    await copyToClipboard(text);
+    showNotice('success', 'Factura copiada al portapapeles.');
+  } catch (error) {
+    showNotice('error', error.message);
   }
 }
 
@@ -559,8 +670,12 @@ async function bootstrap() {
 els.credentialsForm.addEventListener('submit', submitCredentials);
 els.feeReportForm.addEventListener('submit', sendFeeReport);
 els.activateButton.addEventListener('click', activateBot);
+els.pauseTradingButton.addEventListener('click', pauseTrading);
+els.resumeTradingButton.addEventListener('click', resumeTrading);
 els.deactivateButton.addEventListener('click', deactivateBot);
 els.refreshCapitalButton.addEventListener('click', refreshCapital);
+els.copyReferralCodeButton.addEventListener('click', copyReferralCode);
+els.copyFeeInvoiceButton.addEventListener('click', copyFeeInvoice);
 els.refreshButton.addEventListener('click', () => loadDashboard({ refreshCapital: false }).catch((error) => showNotice('error', error.message)));
 
 bootstrap();
