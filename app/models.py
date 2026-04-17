@@ -19,6 +19,7 @@ class UsuarioModel:
         db.crear_indice(UsuarioModel.COLECCION, "bot_activo")
         db.crear_indice(UsuarioModel.COLECCION, "trading_enabled")
         db.crear_indice(UsuarioModel.COLECCION, "fee_status")
+        db.crear_indice(UsuarioModel.COLECCION, "referidor_id", sparse=True)
 
     @staticmethod
     def defaults(usuario_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -27,6 +28,14 @@ class UsuarioModel:
             "capital_total": 0.0,
             "capital_activo": 0.0,
             "codigo_referido": str(usuario_data.get("telegram_id")),
+            "referidor_id": None,
+            "referred_by_code": None,
+            "referral_linked_at": None,
+            "ganancia_diaria_referidos": 0.0,
+            "ganancia_acumulada_referidos": 0.0,
+            "referral_pending_balance": 0.0,
+            "referral_available_balance": 0.0,
+            "referral_paid_total": 0.0,
             "estado": None,
             "api_key": None,
             "api_secret": None,
@@ -177,6 +186,61 @@ class UsuarioModel:
         )
 
     @staticmethod
+    def vincular_referidor(telegram_id: int, referidor_id: int, referral_code: str):
+        return UsuarioModel.actualizar_usuario(
+            {"telegram_id": telegram_id},
+            {
+                "referidor_id": int(referidor_id),
+                "referred_by_code": str(referral_code),
+                "referral_linked_at": datetime.utcnow(),
+            },
+        )
+
+    @staticmethod
+    def registrar_referral_pendiente(referidor_id: int, monto: float):
+        return db.incrementar_documento(
+            UsuarioModel.COLECCION,
+            {"telegram_id": referidor_id},
+            {"referral_pending_balance": float(monto)},
+        )
+
+    @staticmethod
+    def registrar_referral_disponible(referidor_id: int, monto: float):
+        return db.incrementar_documento(
+            UsuarioModel.COLECCION,
+            {"telegram_id": referidor_id},
+            {
+                "referral_available_balance": float(monto),
+                "ganancia_diaria_referidos": float(monto),
+                "ganancia_acumulada_referidos": float(monto),
+            },
+        )
+
+    @staticmethod
+    def liberar_referral_a_disponible(referidor_id: int, monto: float):
+        return db.incrementar_documento(
+            UsuarioModel.COLECCION,
+            {"telegram_id": referidor_id},
+            {
+                "referral_pending_balance": -float(monto),
+                "referral_available_balance": float(monto),
+                "ganancia_diaria_referidos": float(monto),
+                "ganancia_acumulada_referidos": float(monto),
+            },
+        )
+
+    @staticmethod
+    def registrar_referral_pagado(referidor_id: int, monto: float):
+        return db.incrementar_documento(
+            UsuarioModel.COLECCION,
+            {"telegram_id": referidor_id},
+            {
+                "referral_available_balance": -float(monto),
+                "referral_paid_total": float(monto),
+            },
+        )
+
+    @staticmethod
     def actualizar_capital_snapshot(telegram_id: int, capital_total: float, capital_activo: float):
         return UsuarioModel.actualizar_usuario(
             {"telegram_id": telegram_id},
@@ -294,14 +358,21 @@ class ReferidoModel:
     def ensure_indexes() -> None:
         db.crear_indice(ReferidoModel.COLECCION, "referido_id", unique=True)
         db.crear_indice(ReferidoModel.COLECCION, "referidor_id")
+        db.crear_indice(ReferidoModel.COLECCION, "status")
 
     @staticmethod
     def registrar_referido(referido_data: Dict[str, Any]):
         data = {
+            "codigo_referido": None,
+            "status": "linked",
             "ganancia_diaria": 0.0,
             "ganancia_acumulada": 0.0,
             "comision": 0.0,
+            "total_pendiente": 0.0,
+            "total_disponible": 0.0,
+            "total_pagado": 0.0,
             "fecha_registro": datetime.utcnow(),
+            "last_commission_at": None,
         }
         data.update(referido_data)
         return db.insertar_documento(ReferidoModel.COLECCION, data)
@@ -311,28 +382,82 @@ class ReferidoModel:
         return db.buscar_todos_documentos(ReferidoModel.COLECCION, filtro)
 
     @staticmethod
-    def actualizar_ganancia_diaria(referido_id: int, monto: float):
-        return db.incrementar_documento(
-            ReferidoModel.COLECCION,
-            {"referido_id": referido_id},
-            {"ganancia_diaria": float(monto), "comision": float(monto)},
+    def obtener_referido(filtro: Dict[str, Any]):
+        return db.buscar_documento(ReferidoModel.COLECCION, filtro)
+
+    @staticmethod
+    def vincular_referido(referidor_id: int, referido_id: int, codigo_referido: str):
+        existente = ReferidoModel.obtener_referido({"referido_id": referido_id})
+        if existente:
+            return existente
+        ReferidoModel.registrar_referido(
+            {
+                "referidor_id": int(referidor_id),
+                "referido_id": int(referido_id),
+                "codigo_referido": str(codigo_referido),
+                "status": "linked",
+            }
+        )
+        return ReferidoModel.obtener_referido({"referido_id": referido_id})
+
+    @staticmethod
+    def registrar_comision_pendiente(referido_id: int, monto: float):
+        collection = db.obtener_coleccion(ReferidoModel.COLECCION)
+        collection.update_one(
+            {"referido_id": int(referido_id)},
+            {
+                "$inc": {
+                    "total_pendiente": float(monto),
+                    "comision": float(monto),
+                },
+                "$set": {"last_commission_at": datetime.utcnow()},
+            },
         )
 
     @staticmethod
-    def actualizar_ganancia_acumulada(referido_id: int, monto: float):
-        return db.incrementar_documento(
-            ReferidoModel.COLECCION,
-            {"referido_id": referido_id},
-            {"ganancia_acumulada": float(monto)},
+    def registrar_comision_disponible(referido_id: int, monto: float):
+        collection = db.obtener_coleccion(ReferidoModel.COLECCION)
+        collection.update_one(
+            {"referido_id": int(referido_id)},
+            {
+                "$inc": {
+                    "total_disponible": float(monto),
+                    "ganancia_diaria": float(monto),
+                    "ganancia_acumulada": float(monto),
+                    "comision": float(monto),
+                },
+                "$set": {"last_commission_at": datetime.utcnow()},
+            },
         )
 
     @staticmethod
-    def actualizar_ganancia_referido(referidor_id: int, monto: float):
-        return db.incrementar_documento(
-            ReferidoModel.COLECCION,
-            {"referidor_id": referidor_id},
-            {"ganancia_diaria": float(monto), "comision": float(monto)},
-            upsert=False,
+    def liberar_comision_a_disponible(referido_id: int, monto: float):
+        collection = db.obtener_coleccion(ReferidoModel.COLECCION)
+        collection.update_one(
+            {"referido_id": int(referido_id)},
+            {
+                "$inc": {
+                    "total_pendiente": -float(monto),
+                    "total_disponible": float(monto),
+                    "ganancia_diaria": float(monto),
+                    "ganancia_acumulada": float(monto),
+                },
+                "$set": {"last_commission_at": datetime.utcnow()},
+            },
+        )
+
+    @staticmethod
+    def registrar_comision_pagada(referido_id: int, monto: float):
+        collection = db.obtener_coleccion(ReferidoModel.COLECCION)
+        collection.update_one(
+            {"referido_id": int(referido_id)},
+            {
+                "$inc": {
+                    "total_disponible": -float(monto),
+                    "total_pagado": float(monto),
+                },
+                "$set": {"last_commission_at": datetime.utcnow()},
+            },
         )
 
 
@@ -344,6 +469,8 @@ class FeeModel:
         db.crear_indice(FeeModel.COLECCION, "telegram_id")
         db.crear_indice(FeeModel.COLECCION, "fecha")
         db.crear_indice(FeeModel.COLECCION, "invoice_id", sparse=True)
+        db.crear_indice(FeeModel.COLECCION, "operation_order_number", sparse=True)
+        db.crear_indice(FeeModel.COLECCION, "collection_status")
 
     @staticmethod
     def registrar_fee(fee_data: Dict[str, Any]):
@@ -352,8 +479,79 @@ class FeeModel:
         return db.insertar_documento(FeeModel.COLECCION, data)
 
     @staticmethod
-    def obtener_fees(filtro: Dict[str, Any]):
-        return db.buscar_todos_documentos(FeeModel.COLECCION, filtro)
+    def obtener_fee(filtro: Dict[str, Any]):
+        return db.buscar_documento(FeeModel.COLECCION, filtro)
+
+    @staticmethod
+    def obtener_fees(filtro: Dict[str, Any], limit: Optional[int] = None):
+        return db.buscar_todos_documentos(
+            FeeModel.COLECCION,
+            filtro,
+            sort=[("fecha", DESCENDING)],
+            limit=limit,
+        )
+
+    @staticmethod
+    def actualizar_fee(filtro: Dict[str, Any], actualizacion: Dict[str, Any]):
+        payload = dict(actualizacion)
+        payload["updated_at"] = datetime.utcnow()
+        return db.actualizar_documento(FeeModel.COLECCION, filtro, payload)
+
+    @staticmethod
+    def obtener_fees_pendientes_cobro(telegram_id: int):
+        return db.buscar_todos_documentos(
+            FeeModel.COLECCION,
+            {
+                "telegram_id": int(telegram_id),
+                "collection_status": {"$in": ["pending", "partial_collected"]},
+                "total_fee": {"$gt": 0},
+            },
+            sort=[("fecha", 1)],
+        )
+
+
+class ReferralCommissionModel:
+    COLECCION = "referral_commissions"
+
+    @staticmethod
+    def ensure_indexes() -> None:
+        db.crear_indice(ReferralCommissionModel.COLECCION, [("referido_id", 1), ("operation_order_number", 1)], unique=True)
+        db.crear_indice(ReferralCommissionModel.COLECCION, "referidor_id")
+        db.crear_indice(ReferralCommissionModel.COLECCION, "status")
+        db.crear_indice(ReferralCommissionModel.COLECCION, "payout_status")
+        db.crear_indice(ReferralCommissionModel.COLECCION, "created_at")
+
+    @staticmethod
+    def registrar_comision(data: Dict[str, Any]):
+        payload = {
+            "status": "pending_collection",
+            "payout_status": "pending",
+            "available_amount": 0.0,
+            "paid_amount": 0.0,
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow(),
+        }
+        payload.update(data)
+        return db.insertar_documento(ReferralCommissionModel.COLECCION, payload)
+
+    @staticmethod
+    def obtener_comision(filtro: Dict[str, Any]):
+        return db.buscar_documento(ReferralCommissionModel.COLECCION, filtro)
+
+    @staticmethod
+    def obtener_comisiones(filtro: Dict[str, Any], limit: Optional[int] = None):
+        return db.buscar_todos_documentos(
+            ReferralCommissionModel.COLECCION,
+            filtro,
+            sort=[("created_at", DESCENDING)],
+            limit=limit,
+        )
+
+    @staticmethod
+    def actualizar_comision(filtro: Dict[str, Any], actualizacion: Dict[str, Any]):
+        payload = dict(actualizacion)
+        payload["updated_at"] = datetime.utcnow()
+        return db.actualizar_documento(ReferralCommissionModel.COLECCION, filtro, payload)
 
 
 class PaymentInvoiceModel:
@@ -494,6 +692,7 @@ def ensure_indexes() -> None:
     OperacionModel.ensure_indexes()
     ReferidoModel.ensure_indexes()
     FeeModel.ensure_indexes()
+    ReferralCommissionModel.ensure_indexes()
     PaymentInvoiceModel.ensure_indexes()
     TradeStateModel.ensure_indexes()
     TradeEventModel.ensure_indexes()
