@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from app.config import API_PREFIX, ADMIN_TELEGRAM_IDS, ENABLE_API_SERVER, MINI_APP_URL
 from app.mensajes import mensaje_fee
 from app.models import OperacionModel, PaymentInvoiceModel, UsuarioModel
-from app.services.user_trading_service import UserTradingService
+from app.services.user_trading_service import TradingToggleResult, UserTradingService
 from .security import (
     MiniAppSessionManager,
     SessionTokenError,
@@ -293,6 +293,28 @@ def create_api_app() -> FastAPI:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
         service.deactivate_bot(current_user.telegram_id)
         return _json({"status": "deactivated"})
+
+    @app.post(f"{API_PREFIX}/me/trading/pause")
+    def me_trading_pause(current_user: AuthenticatedUser = Depends(get_current_user)):
+        result = service.pause_trading(current_user.telegram_id)
+        if result.status == "user_not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
+        if result.status == "fee_locked":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=result.reason or "Trading bloqueado por fee pendiente")
+        return _json({"status": result.status, "user": service.serialize_user_public(result.user or {})})
+
+    @app.post(f"{API_PREFIX}/me/trading/resume")
+    def me_trading_resume(current_user: AuthenticatedUser = Depends(get_current_user)):
+        result = service.resume_trading(current_user.telegram_id)
+        if result.status == "user_not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
+        if result.status == "fee_locked":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=result.reason or "Trading bloqueado por fee pendiente")
+        return _json({
+            "status": result.status,
+            "invoice": result.invoice,
+            "user": service.serialize_user_public(result.user or {}),
+        })
 
     @app.get(f"{API_PREFIX}/admin/summary")
     def admin_summary(current_admin: AuthenticatedUser = Depends(get_admin_user)):
