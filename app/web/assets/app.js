@@ -44,6 +44,7 @@ const els = {
   detailEngineError: document.getElementById('detailEngineError'),
   detailReferralDaily: document.getElementById('detailReferralDaily'),
   detailReferralTotal: document.getElementById('detailReferralTotal'),
+  detailReferralLink: document.getElementById('detailReferralLink'),
   detailActivePosition: document.getElementById('detailActivePosition'),
   detailUpdatedAt: document.getElementById('detailUpdatedAt'),
   detailTelegramId: document.getElementById('detailTelegramId'),
@@ -272,6 +273,7 @@ function renderReadonlyPreview() {
   els.detailEngineError.textContent = '--';
   els.detailReferralDaily.textContent = '--';
   els.detailReferralTotal.textContent = '--';
+  els.detailReferralLink.textContent = '--';
   els.detailActivePosition.textContent = '--';
   els.detailTelegramId.textContent = '--';
   els.detailPaymentMethod.textContent = '--';
@@ -424,6 +426,7 @@ function updateDashboardView(payload) {
   els.detailEngineError.textContent = textOrDash(user.last_engine_error || 'Sin error reciente');
   els.detailReferralDaily.textContent = formatMoney(referrals.ganancia_diaria, user.payment_asset || 'USDT');
   els.detailReferralTotal.textContent = formatMoney(referrals.ganancia_acumulada, user.payment_asset || 'USDT');
+  els.detailReferralLink.textContent = referrals.enlace_referido ? 'Listo para compartir' : 'No disponible';
   els.detailActivePosition.textContent = user.active_position ? 'Sí' : 'No';
   els.detailTelegramId.textContent = textOrDash(user.telegram_id);
   els.detailPaymentMethod.textContent = paymentMethodLabel(user.payment_method);
