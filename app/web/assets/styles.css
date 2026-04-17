@@ -377,6 +377,10 @@ img {
   gap: 10px;
 }
 
+.button-row--sidebar {
+  margin-top: 16px;
+}
+
 .status-list {
   display: grid;
   gap: 14px;
