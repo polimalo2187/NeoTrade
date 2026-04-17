@@ -58,6 +58,10 @@ class ApiCredentialsRequest(BaseModel):
     api_secret: str
 
 
+class FeeReportRequest(BaseModel):
+    report_text: str = Field(..., min_length=3, max_length=4000)
+
+
 class ReferralCoinWUidRequest(BaseModel):
     coinw_uid: str = Field(..., min_length=4, max_length=32)
 
