@@ -64,15 +64,29 @@ img {
 }
 
 .topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 18px 20px;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.9fr);
+  align-items: stretch;
+  gap: 24px;
+  padding: 24px;
   margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.topbar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 18% 24%, rgba(37, 99, 235, 0.18), transparent 34%),
+    radial-gradient(circle at 82% 18%, rgba(59, 130, 246, 0.12), transparent 28%);
+  pointer-events: none;
 }
 
 .brand {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   min-width: 0;
@@ -81,7 +95,7 @@ img {
 .brand__stack {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
   min-width: 0;
 }
 
@@ -91,10 +105,27 @@ img {
   max-width: min(240px, 52vw);
 }
 
+.brand__logo--hero {
+  max-width: min(360px, 72vw);
+}
+
 .brand__logo img {
   width: 100%;
   height: auto;
   object-fit: contain;
+}
+
+.brand__subtitle {
+  margin: 0;
+  max-width: 620px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.brand__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .eyebrow {
@@ -107,19 +138,64 @@ img {
 
 
 @media (max-width: 640px) {
-  .topbar {
-    align-items: flex-start;
-  }
-
   .brand__logo {
     max-width: min(220px, 56vw);
   }
+
+  .brand__logo--hero {
+    max-width: min(320px, 78vw);
+  }
+}
+
+.topbar__side {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 14px;
+  align-content: space-between;
 }
 
 .topbar__meta {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
+}
+
+.topbar__stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.topbar-stat {
+  min-height: 118px;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.topbar-stat__label {
+  display: block;
+  color: var(--muted);
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.topbar-stat strong {
+  display: block;
+  margin-top: 12px;
+  font-size: clamp(1.2rem, 2vw, 1.7rem);
+  line-height: 1.1;
+}
+
+.topbar-stat small {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  line-height: 1.45;
 }
 
 .badge {
@@ -499,6 +575,12 @@ textarea:focus {
   font-size: 0.78rem;
 }
 
+.chip--subtle {
+  background: rgba(255, 255, 255, 0.035);
+  border-color: rgba(148, 163, 184, 0.1);
+  color: #dce6f2;
+}
+
 .empty-state {
   padding: 28px 18px;
   text-align: center;
@@ -566,23 +648,98 @@ textarea:focus {
   }
 
   .topbar {
-    align-items: flex-start;
-    flex-direction: column;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.9fr);
+  align-items: stretch;
+  gap: 24px;
+  padding: 24px;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.topbar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 18% 24%, rgba(37, 99, 235, 0.18), transparent 34%),
+    radial-gradient(circle at 82% 18%, rgba(59, 130, 246, 0.12), transparent 28%);
+  pointer-events: none;
+}
+
+.brand {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.brand__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.brand__logo {
+  display: flex;
+  align-items: center;
+  max-width: min(240px, 52vw);
+}
+
+.brand__logo--hero {
+  max-width: min(360px, 72vw);
+}
+
+.brand__logo img {
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+}
+
+.brand__subtitle {
+  margin: 0;
+  max-width: 620px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.brand__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.eyebrow {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.68rem;
+  color: var(--muted);
+}
+
+
+@media (max-width: 640px) {
+  .brand__logo {
+    max-width: min(220px, 56vw);
   }
 
-  .topbar__meta,
-  .button-row,
-  .hero__status,
-  .metrics-grid {
-    grid-template-columns: 1fr;
-    width: 100%;
+  .brand__logo--hero {
+    max-width: min(320px, 78vw);
   }
+}
 
-  .metrics-grid {
-    display: grid;
-  }
+.topbar__side {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 14px;
+  align-content: space-between;
+}
 
-  .topbar__meta {
+.topbar__meta {
     display: flex;
   }
 
