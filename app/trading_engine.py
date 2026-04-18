@@ -33,6 +33,7 @@ from app.config import (
 )
 from app.exchange import CoinWApiError, ExchangeClient
 from app.fee_manager import FeeManager
+from app.market_regime import MarketRegimeDecision, MarketRegimeDetector
 from app.models import OperacionModel, TradeEventModel, TradeStateModel, UsuarioModel
 from app.mtf_strategy import MTFStrategy
 
@@ -123,6 +124,28 @@ class TradingEngine:
             return "none"
         return ",".join(str(reason) for reason in reasons[:limit])
 
+    @staticmethod
+    def _format_regime_detail(decision: Optional[MarketRegimeDecision]) -> str:
+        if not decision:
+            return "state=unknown"
+        detail = decision.detail or {}
+        btc = detail.get("btc") or {}
+        breadth = detail.get("breadth") or {}
+        transition = detail.get("transition") or {}
+        parts = [
+            f"state={decision.state}",
+            f"raw={decision.raw_state}",
+            f"allow_new_entries={decision.allow_new_entries}",
+            f"btc_close={btc.get('close')}",
+            f"btc_last_candle_pct={btc.get('last_candle_pct')}",
+            f"btc_atr_pct={btc.get('atr_pct')}",
+            f"breadth={breadth.get('ratio')}",
+            f"breadth_evaluated={breadth.get('evaluated')}",
+            f"cooldown={transition.get('cooldown_remaining_after')}",
+            f"reasons={','.join(decision.reasons[:4]) or 'none'}",
+        ]
+        return " | ".join(str(part) for part in parts)
+
     def __init__(self):
         self.strategy = MTFStrategy()
         self.notifier = TelegramNotifier(TELEGRAM_BOT_TOKEN)
@@ -137,6 +160,7 @@ class TradingEngine:
         self._kline_cache_lock = threading.Lock()
         self._kline_cache: Dict[tuple, Dict[str, Any]] = {}
         self._market_scan_cache: Optional[Dict[str, Any]] = None
+        self._market_regime_detector = MarketRegimeDetector(self._get_klines_cached)
 
     def start(self):
         if not ENABLE_TRADING_ENGINE:
@@ -182,14 +206,47 @@ class TradingEngine:
 
         candidate_symbols = self._get_candidate_symbols()
         idle_users = [usuario for usuario in usuarios if not usuario.get("active_position")]
-        market_scan = self._get_market_scan(candidate_symbols) if idle_users else self._empty_market_scan(candidate_symbols)
+        try:
+            regime_decision = self._market_regime_detector.detect(candidate_symbols)
+        except Exception as exc:
+            logger.exception("REGIME_DETECTOR_ERROR | error=%s", exc)
+            regime_decision = MarketRegimeDecision(
+                state="RECOVERY_WAIT",
+                raw_state="RECOVERY_WAIT",
+                allow_new_entries=False,
+                changed=False,
+                reasons=["regime_detector_error"],
+                detail={"error": str(exc)},
+            )
+        if regime_decision.changed:
+            logger.warning(
+                "REGIME_CHANGE | %s",
+                self._format_regime_detail(regime_decision),
+            )
+        else:
+            logger.info(
+                "REGIME_EVAL | %s",
+                self._format_regime_detail(regime_decision),
+            )
+
+        allow_scan = bool(idle_users) and regime_decision.allow_new_entries
+        market_scan = self._get_market_scan(candidate_symbols) if allow_scan else self._empty_market_scan(candidate_symbols)
+        if idle_users and not regime_decision.allow_new_entries:
+            logger.warning(
+                "REGIME_BLOCK_NEW_ENTRIES | idle_users=%s | symbols=%s | %s",
+                len(idle_users),
+                len(candidate_symbols),
+                self._format_regime_detail(regime_decision),
+            )
         logger.info(
-            "ENGINE_CYCLE_START | usuarios=%s | symbols=%s | dry_run=%s | idle_users=%s | accepted_signals=%s",
+            "ENGINE_CYCLE_START | usuarios=%s | symbols=%s | dry_run=%s | idle_users=%s | accepted_signals=%s | regime_state=%s | regime_allows_entries=%s",
             len(usuarios),
             len(candidate_symbols),
             DRY_RUN,
             len(idle_users),
             len(market_scan.get("accepted_signals") or []),
+            regime_decision.state,
+            regime_decision.allow_new_entries,
         )
         for usuario in usuarios:
             telegram_id = usuario["telegram_id"]
