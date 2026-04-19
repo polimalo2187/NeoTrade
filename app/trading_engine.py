@@ -136,12 +136,14 @@ class TradingEngine:
             f"state={decision.state}",
             f"raw={decision.raw_state}",
             f"allow_new_entries={decision.allow_new_entries}",
+            f"btc_symbol={detail.get('btc_symbol')}",
             f"btc_close={btc.get('close')}",
             f"btc_last_candle_pct={btc.get('last_candle_pct')}",
             f"btc_atr_pct={btc.get('atr_pct')}",
             f"breadth={breadth.get('ratio')}",
             f"breadth_evaluated={breadth.get('evaluated')}",
             f"cooldown={transition.get('cooldown_remaining_after')}",
+            f"fallback_active={detail.get('fallback_active')}",
             f"reasons={','.join(decision.reasons[:4]) or 'none'}",
         ]
         return " | ".join(str(part) for part in parts)
@@ -263,6 +265,15 @@ class TradingEngine:
                     )
                     self._manage_open_position(usuario, client)
                 else:
+                    if not regime_decision.allow_new_entries:
+                        logger.info(
+                            "SCAN_SKIPPED_REGIME | telegram_id=%s | usuario=%s | state=%s | reasons=%s",
+                            telegram_id,
+                            self._user_name(usuario),
+                            regime_decision.state,
+                            self._format_reason_list(regime_decision.reasons),
+                        )
+                        continue
                     existing_invoice = self.fee_manager.ensure_invoice_if_threshold_reached(telegram_id)
                     if existing_invoice:
                         logger.warning(
