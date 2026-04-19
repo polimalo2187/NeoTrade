@@ -19,6 +19,8 @@ from app.config import (
     REGIME_BREADTH_SAMPLE_SIZE,
     REGIME_BREADTH_WARNING_MIN,
     REGIME_BTC_ATR_SPIKE_MULTIPLIER,
+    REGIME_BTC_BELOW_SLOW_HARD_PCT,
+    REGIME_BTC_BELOW_SLOW_SOFT_PCT,
     REGIME_BTC_LAST_CANDLE_DROP_PCT,
     REGIME_BTC_LAST_CANDLE_RISK_OFF_PCT,
     REGIME_BTC_SYMBOL,
@@ -159,7 +161,12 @@ class MarketRegimeDetector:
         atr_spike = atr_mean > 0 and atr_pct >= atr_mean * REGIME_BTC_ATR_SPIKE_MULTIPLIER
         last_candle_shock = last_candle_pct <= -abs(REGIME_BTC_LAST_CANDLE_DROP_PCT)
         risk_off_candle = last_candle_pct <= -abs(REGIME_BTC_LAST_CANDLE_RISK_OFF_PCT) or intrabar_pct <= -abs(REGIME_BTC_LAST_CANDLE_RISK_OFF_PCT)
-        below_slow = last_close < ema_slow * 0.995
+        below_slow_pct = 0.0
+        if ema_slow > 0 and last_close < ema_slow:
+            below_slow_pct = (ema_slow - last_close) / ema_slow
+        below_slow_soft = below_slow_pct >= REGIME_BTC_BELOW_SLOW_SOFT_PCT
+        below_slow_hard = below_slow_pct >= REGIME_BTC_BELOW_SLOW_HARD_PCT
+        slow_slope_negative = slow_slope < 0
 
         return {
             "context_ok": context_ok,
@@ -181,7 +188,10 @@ class MarketRegimeDetector:
             "atr_spike": atr_spike,
             "last_candle_shock": last_candle_shock,
             "risk_off_candle": risk_off_candle,
-            "below_slow": below_slow,
+            "below_slow_soft": below_slow_soft,
+            "below_slow_hard": below_slow_hard,
+            "below_slow_pct": round(below_slow_pct, 6),
+            "slow_slope_negative": slow_slope_negative,
         }
 
     def _evaluate_breadth_symbol(self, symbol: str) -> Dict[str, Any]:
@@ -279,17 +289,25 @@ class MarketRegimeDetector:
             immediate_risk_off = True
         if btc.get("atr_spike"):
             reasons.append("btc_atr_spike")
-        if btc.get("below_slow"):
+        if btc.get("below_slow_soft"):
             reasons.append("btc_below_ema_slow")
+        if btc.get("below_slow_hard"):
+            reasons.append("btc_deep_below_ema_slow")
         if breadth_ratio <= REGIME_BREADTH_RISK_OFF_MAX:
             reasons.append("breadth_collapsed")
 
+        btc_structure_damaged = bool(
+            btc.get("below_slow_hard") and (btc.get("slow_slope_negative") or not btc.get("bullish_stack"))
+        )
+        btc_structure_weak = bool(
+            btc.get("below_slow_soft") or btc.get("atr_spike") or not btc.get("bullish_stack")
+        )
+
         # Breadth por sí solo no debe mandar el sistema a RISK_OFF de inmediato.
-        # Solo endurecemos a bloqueo duro cuando coincide con daño real en BTC.
+        # Solo bloqueamos duro cuando BTC muestra daño estructural real o shock claro.
         if immediate_risk_off or (
-            breadth_ratio <= REGIME_BREADTH_RISK_OFF_MAX
-            and (btc.get("below_slow") or btc.get("atr_spike") or not btc.get("bullish_stack"))
-        ) or ((btc.get("atr_spike") or btc.get("below_slow")) and breadth_ratio < REGIME_BREADTH_WARNING_MIN):
+            breadth_ratio <= REGIME_BREADTH_RISK_OFF_MAX and (btc_structure_damaged or btc.get("atr_spike"))
+        ) or (btc_structure_damaged and breadth_ratio < REGIME_BREADTH_WARNING_MIN):
             return STATE_RISK_OFF_NO_TRADE, reasons, immediate_risk_off
 
         if btc.get("context_ok") and breadth_ratio >= REGIME_BREADTH_CONTINUATION_MIN:
@@ -299,6 +317,8 @@ class MarketRegimeDetector:
 
         if breadth_ratio < REGIME_BREADTH_WARNING_MIN:
             reasons.append("breadth_weak")
+        if btc_structure_weak and not btc_structure_damaged:
+            reasons.append("btc_structure_soft_weakness")
         if not btc.get("context_ok"):
             reasons.append("btc_trend_not_confirmed")
         return STATE_RECOVERY_WAIT, reasons, False
