@@ -253,9 +253,19 @@ class TradingEngine:
         for usuario in usuarios:
             telegram_id = usuario["telegram_id"]
             try:
-                client = ExchangeClient(usuario.get("api_key"), usuario.get("api_secret"))
-                capital_snapshot = self._refresh_user_capital_snapshot(usuario, client)
                 active_position = usuario.get("active_position")
+                if not active_position and not regime_decision.allow_new_entries:
+                    logger.info(
+                        "SCAN_SKIPPED_REGIME | telegram_id=%s | usuario=%s | state=%s | reasons=%s",
+                        telegram_id,
+                        self._user_name(usuario),
+                        regime_decision.state,
+                        self._format_reason_list(regime_decision.reasons),
+                    )
+                    UsuarioModel.actualizar_engine_error(telegram_id, None)
+                    continue
+
+                client = ExchangeClient(usuario.get("api_key"), usuario.get("api_secret"))
                 if active_position:
                     logger.info(
                         "ENGINE_USER_MANAGE | telegram_id=%s | symbol=%s | trade_id=%s",
@@ -265,15 +275,7 @@ class TradingEngine:
                     )
                     self._manage_open_position(usuario, client)
                 else:
-                    if not regime_decision.allow_new_entries:
-                        logger.info(
-                            "SCAN_SKIPPED_REGIME | telegram_id=%s | usuario=%s | state=%s | reasons=%s",
-                            telegram_id,
-                            self._user_name(usuario),
-                            regime_decision.state,
-                            self._format_reason_list(regime_decision.reasons),
-                        )
-                        continue
+                    capital_snapshot = self._refresh_user_capital_snapshot(usuario, client)
                     existing_invoice = self.fee_manager.ensure_invoice_if_threshold_reached(telegram_id)
                     if existing_invoice:
                         logger.warning(
