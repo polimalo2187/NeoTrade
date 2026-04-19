@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -12,6 +13,7 @@ from app.config import (
     ENABLE_MARKET_REGIME_FILTER,
     MAX_ATR_PCT,
     MIN_ATR_PCT,
+    QUOTE_ASSET,
     REGIME_BREADTH_CONTINUATION_MIN,
     REGIME_BREADTH_RISK_OFF_MAX,
     REGIME_BREADTH_SAMPLE_SIZE,
@@ -23,6 +25,7 @@ from app.config import (
     REGIME_COOLDOWN_CYCLES_AFTER_EXIT,
     REGIME_CONFIRM_CONTINUATION_CYCLES,
     REGIME_CONFIRM_EXIT_CYCLES,
+    REGIME_STALE_DECISION_MAX_SECONDS,
     RSI_TREND_MIN,
     TREND_EMA_FAST_SLOPE_MIN,
     TREND_EMA_SLOW_SLOPE_MIN,
@@ -65,6 +68,8 @@ class MarketRegimeDetector:
         self._pending_count = 0
         self._continuation_cooldown_remaining = 0
         self._last_decision: Optional[MarketRegimeDecision] = None
+        self._last_successful_decision: Optional[MarketRegimeDecision] = None
+        self._last_successful_ts: Optional[float] = None
 
     @staticmethod
     def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -81,6 +86,40 @@ class MarketRegimeDetector:
         if abs(base) < 1e-12:
             return 0.0
         return (float(series.iloc[-1]) - base) / base
+
+    @staticmethod
+    def _normalize_symbol(symbol: Optional[str]) -> str:
+        normalized = str(symbol or "").upper().strip().replace("-", "_").replace("/", "_")
+        return normalized
+
+    def _resolve_btc_symbol(self, candidate_symbols: List[str]) -> str:
+        normalized_candidates = {self._normalize_symbol(symbol) for symbol in candidate_symbols if symbol}
+        configured = self._normalize_symbol(REGIME_BTC_SYMBOL)
+
+        preferred: List[str] = []
+        if configured:
+            preferred.append(configured)
+            if "_" not in configured and configured.endswith(QUOTE_ASSET):
+                base = configured[: -len(QUOTE_ASSET)]
+                if base:
+                    preferred.append(f"{base}_{QUOTE_ASSET}")
+        preferred.extend([
+            f"BTC_{QUOTE_ASSET}",
+            "BTC_USDT",
+        ])
+
+        seen = set()
+        deduped_preferred: List[str] = []
+        for symbol in preferred:
+            normalized = self._normalize_symbol(symbol)
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                deduped_preferred.append(normalized)
+
+        for symbol in deduped_preferred:
+            if symbol in normalized_candidates:
+                return symbol
+        return deduped_preferred[0] if deduped_preferred else f"BTC_{QUOTE_ASSET}"
 
     def _load_indicators(self, symbol: str, period_seconds: int) -> pd.DataFrame:
         raw = self._kline_fetcher(symbol, period_seconds, CANDLE_LIMIT)
@@ -159,12 +198,13 @@ class MarketRegimeDetector:
             },
         }
 
-    def _compute_breadth(self, candidate_symbols: List[str]) -> Dict[str, Any]:
+    def _compute_breadth(self, candidate_symbols: List[str], btc_symbol: str) -> Dict[str, Any]:
         sample_symbols: List[str] = []
         seen = set()
+        normalized_btc = self._normalize_symbol(btc_symbol)
         for symbol in candidate_symbols:
-            normalized = str(symbol or "").upper().strip()
-            if not normalized or normalized == REGIME_BTC_SYMBOL or normalized in seen:
+            normalized = self._normalize_symbol(symbol)
+            if not normalized or normalized == normalized_btc or normalized in seen:
                 continue
             seen.add(normalized)
             sample_symbols.append(normalized)
@@ -293,6 +333,47 @@ class MarketRegimeDetector:
         )
         return effective_raw_state, changed, transition_detail
 
+    def _build_fallback_decision(self, error: Exception) -> MarketRegimeDecision:
+        now = time.time()
+        error_text = str(error)
+        if self._last_successful_decision and self._last_successful_ts is not None:
+            age_seconds = max(0, int(now - self._last_successful_ts))
+            if age_seconds <= REGIME_STALE_DECISION_MAX_SECONDS:
+                base = self._last_successful_decision
+                detail = dict(base.detail or {})
+                detail.update(
+                    {
+                        "fallback_active": True,
+                        "fallback_reason": "detector_error_using_last_successful_decision",
+                        "fallback_error": error_text,
+                        "fallback_age_seconds": age_seconds,
+                    }
+                )
+                reasons = list(base.reasons or [])
+                if "regime_stale_fallback" not in reasons:
+                    reasons.append("regime_stale_fallback")
+                return MarketRegimeDecision(
+                    state=base.state,
+                    raw_state=base.raw_state,
+                    allow_new_entries=base.allow_new_entries,
+                    changed=False,
+                    reasons=reasons,
+                    detail=detail,
+                )
+
+        return MarketRegimeDecision(
+            state=STATE_RECOVERY_WAIT,
+            raw_state=STATE_RECOVERY_WAIT,
+            allow_new_entries=False,
+            changed=False,
+            reasons=["regime_detector_error"],
+            detail={
+                "filter_enabled": True,
+                "fallback_active": False,
+                "error": error_text,
+            },
+        )
+
     def detect(self, candidate_symbols: List[str]) -> MarketRegimeDecision:
         if not ENABLE_MARKET_REGIME_FILTER:
             decision = MarketRegimeDecision(
@@ -304,26 +385,38 @@ class MarketRegimeDetector:
                 detail={"filter_enabled": False},
             )
             self._last_decision = decision
+            self._last_successful_decision = decision
+            self._last_successful_ts = time.time()
             return decision
 
-        btc_df = self._load_indicators(REGIME_BTC_SYMBOL, TREND_PERIOD_SECONDS)
-        btc = self._evaluate_context(btc_df)
-        breadth = self._compute_breadth(candidate_symbols)
-        raw_state, reasons, immediate_risk_off = self._raw_state_from_metrics(btc, breadth)
-        effective_raw_state, changed, transition = self._apply_hysteresis(raw_state, immediate_risk_off)
+        try:
+            btc_symbol = self._resolve_btc_symbol(candidate_symbols)
+            btc_df = self._load_indicators(btc_symbol, TREND_PERIOD_SECONDS)
+            btc = self._evaluate_context(btc_df)
+            breadth = self._compute_breadth(candidate_symbols, btc_symbol)
+            raw_state, reasons, immediate_risk_off = self._raw_state_from_metrics(btc, breadth)
+            effective_raw_state, changed, transition = self._apply_hysteresis(raw_state, immediate_risk_off)
 
-        decision = MarketRegimeDecision(
-            state=self._stable_state,
-            raw_state=effective_raw_state,
-            allow_new_entries=self._stable_state == STATE_CONTINUATION_OK,
-            changed=changed,
-            reasons=reasons,
-            detail={
-                "filter_enabled": True,
-                "btc": btc,
-                "breadth": breadth,
-                "transition": transition,
-            },
-        )
-        self._last_decision = decision
-        return decision
+            decision = MarketRegimeDecision(
+                state=self._stable_state,
+                raw_state=effective_raw_state,
+                allow_new_entries=self._stable_state == STATE_CONTINUATION_OK,
+                changed=changed,
+                reasons=reasons,
+                detail={
+                    "filter_enabled": True,
+                    "btc_symbol": btc_symbol,
+                    "btc": btc,
+                    "breadth": breadth,
+                    "transition": transition,
+                },
+            )
+            self._last_decision = decision
+            self._last_successful_decision = decision
+            self._last_successful_ts = time.time()
+            return decision
+        except Exception as exc:
+            logger.warning("MARKET_REGIME_FALLBACK | error=%s", exc)
+            decision = self._build_fallback_decision(exc)
+            self._last_decision = decision
+            return decision
