@@ -140,6 +140,7 @@ class TradingEngine:
             f"btc_close={btc.get('close')}",
             f"btc_last_candle_pct={btc.get('last_candle_pct')}",
             f"btc_atr_pct={btc.get('atr_pct')}",
+            f"btc_below_slow_pct={btc.get('below_slow_pct')}",
             f"breadth={breadth.get('ratio')}",
             f"breadth_evaluated={breadth.get('evaluated')}",
             f"cooldown={transition.get('cooldown_remaining_after')}",
