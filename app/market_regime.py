@@ -187,14 +187,36 @@ class MarketRegimeDetector:
     def _evaluate_breadth_symbol(self, symbol: str) -> Dict[str, Any]:
         df = self._load_indicators(symbol, TREND_PERIOD_SECONDS)
         info = self._evaluate_context(df)
+
+        # El breadth no debe exigir el mismo nivel de dureza que una señal lista
+        # para ejecutar. Aquí medimos acompañamiento del mercado, no readiness de entrada.
+        fast_slope = self._safe_float(info["fast_slope"])
+        slow_slope = self._safe_float(info["slow_slope"])
+        rsi = self._safe_float(info["rsi"])
+        close_price = self._safe_float(info["close"])
+        ema_fast = self._safe_float(info["ema_fast"])
+        ema_slow = self._safe_float(info["ema_slow"])
+        atr_pct = self._safe_float(info["atr_pct"])
+        last_candle_pct = self._safe_float(info["last_candle_pct"])
+
+        breadth_bullish_stack = ema_fast > ema_slow and close_price >= ema_slow * 0.998
+        breadth_momentum_ok = fast_slope >= -0.0003 and slow_slope >= -0.0002
+        breadth_rsi_ok = rsi >= 46
+        breadth_vol_ok = atr_pct >= max(MIN_ATR_PCT * 0.5, 0.0) and atr_pct <= MAX_ATR_PCT * 1.25
+        breadth_damage = close_price < ema_slow * 0.992 or last_candle_pct <= -0.025
+        passed = bool(breadth_bullish_stack and breadth_momentum_ok and breadth_rsi_ok and breadth_vol_ok and not breadth_damage)
+
         return {
             "symbol": symbol,
-            "passed": bool(info["context_ok"]),
+            "passed": passed,
             "detail": {
                 "rsi": info["rsi"],
                 "atr_pct": info["atr_pct"],
                 "fast_slope": info["fast_slope"],
                 "slow_slope": info["slow_slope"],
+                "bullish_stack": breadth_bullish_stack,
+                "momentum_ok": breadth_momentum_ok,
+                "damage": breadth_damage,
             },
         }
 
@@ -261,9 +283,13 @@ class MarketRegimeDetector:
             reasons.append("btc_below_ema_slow")
         if breadth_ratio <= REGIME_BREADTH_RISK_OFF_MAX:
             reasons.append("breadth_collapsed")
-            immediate_risk_off = True
 
-        if immediate_risk_off or ((btc.get("atr_spike") or btc.get("below_slow")) and breadth_ratio < REGIME_BREADTH_WARNING_MIN):
+        # Breadth por sí solo no debe mandar el sistema a RISK_OFF de inmediato.
+        # Solo endurecemos a bloqueo duro cuando coincide con daño real en BTC.
+        if immediate_risk_off or (
+            breadth_ratio <= REGIME_BREADTH_RISK_OFF_MAX
+            and (btc.get("below_slow") or btc.get("atr_spike") or not btc.get("bullish_stack"))
+        ) or ((btc.get("atr_spike") or btc.get("below_slow")) and breadth_ratio < REGIME_BREADTH_WARNING_MIN):
             return STATE_RISK_OFF_NO_TRADE, reasons, immediate_risk_off
 
         if btc.get("context_ok") and breadth_ratio >= REGIME_BREADTH_CONTINUATION_MIN:
