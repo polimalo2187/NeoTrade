@@ -21,6 +21,8 @@ from app.config import (
     REGIME_BTC_ATR_SPIKE_MULTIPLIER,
     REGIME_BTC_BELOW_SLOW_HARD_PCT,
     REGIME_BTC_BELOW_SLOW_SOFT_PCT,
+    REGIME_BTC_CONTEXT_SCORE_CONTINUATION_MIN,
+    REGIME_BTC_CONTEXT_SCORE_RECOVERY_MIN,
     REGIME_BTC_LAST_CANDLE_DROP_PCT,
     REGIME_BTC_LAST_CANDLE_RISK_OFF_PCT,
     REGIME_BTC_SYMBOL,
@@ -168,8 +170,27 @@ class MarketRegimeDetector:
         below_slow_hard = below_slow_pct >= REGIME_BTC_BELOW_SLOW_HARD_PCT
         slow_slope_negative = slow_slope < 0
 
+        context_score = int(sum(1 for passed in (bullish_stack, slope_ok, rsi_ok, vol_ok, higher_close) if passed))
+        context_score_ok = context_score >= REGIME_BTC_CONTEXT_SCORE_CONTINUATION_MIN
+        recovery_context_ok = context_score >= REGIME_BTC_CONTEXT_SCORE_RECOVERY_MIN
+        context_gate_failures = [
+            name
+            for name, passed in (
+                ("bullish_stack", bullish_stack),
+                ("slope_ok", slope_ok),
+                ("rsi_ok", rsi_ok),
+                ("vol_ok", vol_ok),
+                ("higher_close", higher_close),
+            )
+            if not passed
+        ]
+
         return {
             "context_ok": context_ok,
+            "context_score_ok": context_score_ok,
+            "recovery_context_ok": recovery_context_ok,
+            "context_score": context_score,
+            "context_gate_failures": context_gate_failures,
             "bullish_stack": bullish_stack,
             "slope_ok": slope_ok,
             "rsi_ok": rsi_ok,
@@ -310,17 +331,39 @@ class MarketRegimeDetector:
         ) or (btc_structure_damaged and breadth_ratio < REGIME_BREADTH_WARNING_MIN):
             return STATE_RISK_OFF_NO_TRADE, reasons, immediate_risk_off
 
-        if btc.get("context_ok") and breadth_ratio >= REGIME_BREADTH_CONTINUATION_MIN:
+        btc_continuation_ready = bool(
+            breadth_ratio >= REGIME_BREADTH_CONTINUATION_MIN
+            and btc.get("context_score_ok")
+            and btc.get("recovery_context_ok")
+            and btc.get("vol_ok")
+            and btc.get("rsi_ok")
+            and not btc.get("below_slow_soft")
+            and not btc.get("below_slow_hard")
+            and not btc.get("risk_off_candle")
+            and not btc.get("atr_spike")
+            and not btc_structure_damaged
+        )
+        if btc_continuation_ready:
             reasons.append("btc_trend_ok")
             reasons.append("breadth_continuation_ok")
+            if not btc.get("context_ok"):
+                reasons.append("btc_trend_score_override")
             return STATE_CONTINUATION_OK, reasons, False
 
         if breadth_ratio < REGIME_BREADTH_WARNING_MIN:
             reasons.append("breadth_weak")
         if btc_structure_weak and not btc_structure_damaged:
             reasons.append("btc_structure_soft_weakness")
+        if not btc.get("recovery_context_ok"):
+            reasons.append("btc_recovery_context_not_confirmed")
+        if not btc.get("context_score_ok"):
+            reasons.append("btc_context_score_below_continuation")
         if not btc.get("context_ok"):
-            reasons.append("btc_trend_not_confirmed")
+            failures = list(btc.get("context_gate_failures") or [])[:3]
+            if failures:
+                reasons.append("btc_trend_not_confirmed:" + "+".join(failures))
+            else:
+                reasons.append("btc_trend_not_confirmed")
         return STATE_RECOVERY_WAIT, reasons, False
 
     def _apply_hysteresis(self, raw_state: str, immediate_risk_off: bool) -> Tuple[str, bool, Dict[str, Any]]:
