@@ -17,6 +17,7 @@ from app.config import (
     REGIME_BREADTH_CONTINUATION_MIN,
     REGIME_BREADTH_RISK_OFF_MAX,
     REGIME_BREADTH_SAMPLE_SIZE,
+    REGIME_BREADTH_STRONG_BTC_OVERRIDE_MIN,
     REGIME_BREADTH_WARNING_MIN,
     REGIME_BTC_ATR_SPIKE_MULTIPLIER,
     REGIME_BTC_BELOW_SLOW_HARD_PCT,
@@ -343,15 +344,37 @@ class MarketRegimeDetector:
             and not btc.get("atr_spike")
             and not btc_structure_damaged
         )
+        strong_btc_gray_zone_override = bool(
+            breadth_ratio >= REGIME_BREADTH_STRONG_BTC_OVERRIDE_MIN
+            and breadth_ratio < REGIME_BREADTH_CONTINUATION_MIN
+            and btc.get("context_score", 0) >= 5
+            and btc.get("context_ok")
+            and btc.get("bullish_stack")
+            and btc.get("slope_ok")
+            and btc.get("higher_close")
+            and btc.get("vol_ok")
+            and btc.get("rsi_ok")
+            and not btc.get("below_slow_soft")
+            and not btc.get("below_slow_hard")
+            and not btc.get("risk_off_candle")
+            and not btc.get("atr_spike")
+            and not btc_structure_damaged
+        )
         if btc_continuation_ready:
             reasons.append("btc_trend_ok")
             reasons.append("breadth_continuation_ok")
             if not btc.get("context_ok"):
                 reasons.append("btc_trend_score_override")
             return STATE_CONTINUATION_OK, reasons, False
+        if strong_btc_gray_zone_override:
+            reasons.append("btc_trend_ok")
+            reasons.append("breadth_gray_zone_strong_btc_override")
+            return STATE_CONTINUATION_OK, reasons, False
 
         if breadth_ratio < REGIME_BREADTH_WARNING_MIN:
             reasons.append("breadth_weak")
+        elif breadth_ratio < REGIME_BREADTH_CONTINUATION_MIN:
+            reasons.append("breadth_below_continuation_threshold")
         if btc_structure_weak and not btc_structure_damaged:
             reasons.append("btc_structure_soft_weakness")
         if not btc.get("recovery_context_ok"):
