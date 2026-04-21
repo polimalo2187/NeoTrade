@@ -141,11 +141,13 @@ class TradingEngine:
             f"btc_last_candle_pct={btc.get('last_candle_pct')}",
             f"btc_atr_pct={btc.get('atr_pct')}",
             f"btc_below_slow_pct={btc.get('below_slow_pct')}",
+            f"btc_context_score={btc.get('context_score')}",
+            f"btc_context_failures={'+'.join((btc.get('context_gate_failures') or [])[:3]) or 'none'}",
             f"breadth={breadth.get('ratio')}",
             f"breadth_evaluated={breadth.get('evaluated')}",
             f"cooldown={transition.get('cooldown_remaining_after')}",
             f"fallback_active={detail.get('fallback_active')}",
-            f"reasons={','.join(decision.reasons[:4]) or 'none'}",
+            f"reasons={','.join(decision.reasons[:5]) or 'none'}",
         ]
         return " | ".join(str(part) for part in parts)
 
